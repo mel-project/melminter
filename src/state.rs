@@ -1,33 +1,68 @@
-use std::{collections::BTreeMap, path::Path};
-
-use blkstructs::{CoinData, CoinDataHeight, CoinID, Transaction, TxKind};
+use anyhow::Context;
+use blkstructs::{melvm::Covenant, CoinData, Denom, Transaction, MICRO_CONVERTER};
+use nodeprot::ValClient;
 use serde::{Deserialize, Serialize};
-use tmelcrypt::HashVal;
+use tmelcrypt::Ed25519SK;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct MintState {
-    pub chain_tip_id: CoinID,
-    pub chain_tip_cdh: CoinDataHeight,
-    pub chain_tip_hash: HashVal,
-    pub payout_covhash: HashVal,
+    wallet_url: String,
+    my_sk: Ed25519SK,
+    client: ValClient,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PrepareReq {
+    signing_key: String,
+    outputs: Vec<CoinData>,
 }
 
 impl MintState {
-    pub async fn read_from_file(fname: &Path) -> anyhow::Result<Self> {
-        Ok(serde_json::from_slice(&smol::fs::read(fname).await?)?)
+    pub fn new(wallet_url: String, my_sk: Ed25519SK, client: ValClient) -> Self {
+        Self {
+            wallet_url,
+            my_sk,
+            client,
+        }
     }
 
-    pub async fn write_to_file(&self, fname: &Path) -> anyhow::Result<()> {
-        // TODO: atomically do this
-        smol::fs::write(fname, serde_json::to_vec_pretty(self)?).await?;
-        Ok(())
+    async fn prepare_dummy(&self) -> surf::Result<Transaction> {
+        let req = PrepareReq {
+            signing_key: hex::encode(&self.my_sk.0),
+            outputs: vec![CoinData {
+                covhash: Covenant::std_ed25519_pk_new(self.my_sk.to_public()).hash(),
+                denom: Denom::Mel,
+                value: MICRO_CONVERTER,
+                additional_data: vec![],
+            }],
+        };
+        let mut res = surf::post(format!("{}/prepare-tx", self.wallet_url))
+            .body(serde_json::to_vec(&req).unwrap())
+            .await?;
+        Ok(res.body_json().await?)
     }
 
     /// Creates a partially-filled-in transaction, with the given difficulty, that's neither signed nor feed. The caller should fill in the DOSC output.
-    pub async fn mint_transaction(&self, difficulty: usize) -> Transaction {
+    pub async fn mint_transaction(&self, difficulty: usize) -> surf::Result<(Transaction, u64)> {
+        let mut transaction = self.prepare_dummy().await?;
+        let tip_cdh = self
+            .client
+            .snapshot()
+            .await?
+            .get_coin(transaction.inputs[0])
+            .await?
+            .context("dummy transaction's input spent from behind our back")?;
+        let tip_header_hash = self
+            .client
+            .snapshot()
+            .await?
+            .get_history(tip_cdh.height)
+            .await?
+            .expect("history not found")
+            .hash();
         let chi = tmelcrypt::hash_keyed(
-            &self.chain_tip_hash,
-            &stdcode::serialize(&self.chain_tip_id).unwrap(),
+            &tip_header_hash,
+            &stdcode::serialize(&transaction.inputs[0]).unwrap(),
         );
         let proof = smol::unblock(move || melpow::Proof::generate(&chi, difficulty)).await;
         let difficulty = difficulty as u32;
@@ -35,16 +70,17 @@ impl MintState {
         assert!(melpow::Proof::from_bytes(&proof_bytes)
             .unwrap()
             .verify(&chi, difficulty as usize));
-        dbg!(chi);
-        dbg!(tmelcrypt::hash_single(&proof_bytes));
-        Transaction {
-            kind: TxKind::DoscMint,
-            inputs: vec![self.chain_tip_id],
-            data: stdcode::serialize(&(difficulty, proof_bytes)).unwrap(),
-            outputs: vec![self.chain_tip_cdh.coin_data.clone()],
-            fee: 0,
-            scripts: vec![],
-            sigs: vec![],
-        }
+
+        transaction.data = stdcode::serialize(&(difficulty, proof_bytes)).unwrap();
+
+        Ok((transaction, tip_cdh.height))
+    }
+
+    /// Sends a transaction out.
+    pub async fn send_transaction(&self, transaction: Transaction) -> surf::Result<()> {
+        surf::post(format!("{}/send-tx", self.wallet_url))
+            .body(serde_json::to_vec(&transaction).unwrap())
+            .await?;
+        Ok(())
     }
 }

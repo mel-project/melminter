@@ -4,39 +4,30 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use anyhow::Context;
-use blkstructs::{melvm::Covenant, CoinData, CoinDataHeight, CoinID, Denom, Transaction};
-use cmdopts::{CmdOpts, InitCmdOpts, MintCmdOpts};
-use nodeprot::ValClientSnapshot;
+use blkstructs::{melvm::Covenant, CoinData, Denom, Transaction, TxKind};
+use cmdopts::CmdOpts;
+use nodeprot::ValClient;
 use state::MintState;
 use structopt::StructOpt;
-use tmelcrypt::HashVal;
 mod cmdopts;
 mod state;
 use smol::prelude::*;
 
-fn main() -> anyhow::Result<()> {
+fn main() -> surf::Result<()> {
     let log_conf = std::env::var("RUST_LOG").unwrap_or_else(|_| "melminter=debug,warn".into());
     std::env::set_var("RUST_LOG", log_conf);
     let opts = CmdOpts::from_args();
     tracing_subscriber::fmt::init();
-    smolscale::block_on(async move {
-        match opts {
-            CmdOpts::Init(init) => main_init(init).await,
-            CmdOpts::Mint(opts) => main_mint(opts).await,
-        }
-    })
+    smolscale::block_on(main_async(opts))
 }
 
-async fn main_mint(opts: MintCmdOpts) -> anyhow::Result<()> {
-    let mut mint_state = MintState::read_from_file(&opts.common.persist).await?;
+async fn main_async(opts: CmdOpts) -> surf::Result<()> {
     let mut my_speed = compute_speed().await;
-    let snap = get_snapshot(opts.common.testnet, opts.common.connect).await?;
+    let client = get_valclient(opts.testnet, opts.connect).await?;
+    let snap = client.snapshot().await?;
     let max_speed = snap.current_header().dosc_speed as f64 / 30.0;
-    assert_eq!(
-        snap.get_coin(mint_state.chain_tip_id).await?.unwrap(),
-        mint_state.chain_tip_cdh
-    );
+
+    let mint_state = MintState::new(opts.wallet_url.clone(), opts.secret_key, client.clone());
 
     loop {
         log::info!("** My speed: {:.3} kH/s", my_speed / 1000.0);
@@ -45,7 +36,7 @@ async fn main_mint(opts: MintCmdOpts) -> anyhow::Result<()> {
             "** Estimated return: {:.2} rDOSC/day",
             my_speed * max_speed / max_speed.powi(2)
         );
-        let my_difficulty = (my_speed * 3000.0).log2().ceil() as usize;
+        let my_difficulty = (my_speed * 3100.0).log2().ceil() as usize;
         let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
         log::info!(
             "** Selected difficulty: {} (approx. {:?} / tx)",
@@ -55,7 +46,7 @@ async fn main_mint(opts: MintCmdOpts) -> anyhow::Result<()> {
         let start = Instant::now();
         let deadline =
             SystemTime::now() + Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
-        let mut tx: Transaction = mint_state
+        let (mut tx, earlier_height): (Transaction, u64) = mint_state
             .mint_transaction(my_difficulty)
             .or(async move {
                 loop {
@@ -66,13 +57,10 @@ async fn main_mint(opts: MintCmdOpts) -> anyhow::Result<()> {
                     smol::Timer::after(Duration::from_secs(60)).await;
                 }
             })
-            .await;
-        let snap = repeat_fallible(|| async {
-            get_snapshot(opts.common.testnet, opts.common.connect).await
-        })
-        .await;
+            .await?;
+        let snap = repeat_fallible(|| client.snapshot()).await;
         let reward_speed = 2u128.pow(my_difficulty as u32)
-            / (snap.current_header().height + 5 - mint_state.chain_tip_cdh.height) as u128;
+            / (snap.current_header().height + 5 - earlier_height) as u128;
         let reward = blkstructs::calculate_reward(
             reward_speed,
             snap.current_header().dosc_speed,
@@ -83,49 +71,24 @@ async fn main_mint(opts: MintCmdOpts) -> anyhow::Result<()> {
             denom: Denom::NomDosc,
             value: reward_nom,
             additional_data: vec![],
-            covhash: mint_state.payout_covhash,
+            covhash: tx.outputs[0].covhash,
         });
-        tx.scripts
-            .push(Covenant::std_ed25519_pk_new(opts.secret_key.to_public()));
+        tx.kind = TxKind::DoscMint;
+        assert_eq!(
+            tx.scripts[0],
+            Covenant::std_ed25519_pk_new(opts.secret_key.to_public())
+        );
         tx = tx
-            .applied_fee(snap.current_header().fee_multiplier, 100, 0)
-            .unwrap()
-            .signed_ed25519(opts.secret_key);
-        // broadcast and wait
-        let (coin_id, cdh, hash): (CoinID, CoinDataHeight, HashVal) = repeat_fallible(|| async {
-            loop {
-                let snap = get_snapshot(opts.common.testnet, opts.common.connect).await?;
-                let cdh = snap.get_coin(tx.get_coinid(0)).await?;
-                if let Some(cdh) = cdh {
-                    log::info!(
-                        "***** MINTED {} µNomDOSC => {} @ {} / {} µMEL left in chain *****",
-                        tx.outputs[1].value,
-                        tx.outputs[1].covhash.to_addr(),
-                        tx.get_coinid(1),
-                        tx.outputs[0].value,
-                    );
-                    return Ok::<_, anyhow::Error>((
-                        tx.get_coinid(0),
-                        cdh.clone(),
-                        snap.get_history(cdh.height)
-                            .await?
-                            .unwrap_or_else(|| snap.current_header())
-                            .hash(),
-                    ));
-                } else {
-                    if let Err(err) = snap.get_raw().send_tx(tx.clone()).await {
-                        log::debug!("error while transmit: {:?}", err);
-                    }
-                    smol::Timer::after(Duration::from_secs(30)).await;
-                }
-            }
-        })
-        .await;
-        mint_state.chain_tip_id = coin_id;
-        mint_state.chain_tip_cdh = cdh;
-        mint_state.chain_tip_hash = hash;
+            .applied_fee(snap.current_header().fee_multiplier * 2, 1000, 0)
+            .unwrap();
+        tx.sigs.clear();
+        for _ in 0..tx.inputs.len() {
+            tx = tx.signed_ed25519(opts.secret_key)
+        }
         my_speed = 2.0f64.powi(my_difficulty as _) / start.elapsed().as_secs_f64();
-        mint_state.write_to_file(&opts.common.persist).await?;
+        dbg!(tx.fee);
+        // panic!("oh no");
+        mint_state.send_transaction(tx).await?;
     }
 }
 
@@ -148,46 +111,14 @@ async fn compute_speed() -> f64 {
         smol::unblock(move || melpow::Proof::generate(&[], difficulty)).await;
         let elapsed = start.elapsed();
         let speed = 2.0f64.powi(difficulty as _) / elapsed.as_secs_f64();
-        if elapsed.as_secs_f64() > 10.0 {
+        if elapsed.as_secs_f64() > 2.0 {
             return speed;
         }
     }
     unreachable!()
 }
 
-async fn main_init(init: InitCmdOpts) -> anyhow::Result<()> {
-    log::info!("Initial CoinID: {}", init.coinid);
-    log::info!(
-        "Payout covhash: {}",
-        HashVal::from_addr(&init.payout_addr).context("could not parse address")?
-    );
-    log::info!("Obtaining CoinDataHeight...");
-    let snapshot = get_snapshot(init.common.testnet, init.common.connect)
-        .await
-        .context("cannot get snapshot")?;
-    let cdh = snapshot
-        .get_coin(init.coinid)
-        .await
-        .context("cannot get CDH from network")?;
-    if let Some(cdh) = cdh {
-        let mint_state = MintState {
-            chain_tip_id: init.coinid,
-            chain_tip_cdh: cdh.clone(),
-            chain_tip_hash: snapshot.get_history(cdh.height).await?.unwrap().hash(),
-            payout_covhash: HashVal::from_addr(&init.payout_addr).unwrap(),
-        };
-        mint_state
-            .write_to_file(&init.common.persist)
-            .await
-            .context("cannot save persist file")?;
-        log::info!("Saved to disk! {:?}", init.common.persist);
-        Ok(())
-    } else {
-        anyhow::bail!("Did not found CoinDataHeight!")
-    }
-}
-
-async fn get_snapshot(testnet: bool, connect: SocketAddr) -> anyhow::Result<ValClientSnapshot> {
+async fn get_valclient(testnet: bool, connect: SocketAddr) -> anyhow::Result<ValClient> {
     let client = nodeprot::ValClient::new(
         if testnet {
             blkstructs::NetID::Testnet
@@ -211,5 +142,5 @@ async fn get_snapshot(testnet: bool, connect: SocketAddr) -> anyhow::Result<ValC
                 .unwrap(),
         );
     }
-    Ok(client.snapshot().await?)
+    Ok(client)
 }
