@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use blkstructs::{melvm::Covenant, CoinData, Denom, Transaction, TxKind};
+use themelio_stf::{CoinData, Denom, Transaction, TxKind, melpow, melvm::Covenant};
 use cmdopts::CmdOpts;
 use nodeprot::ValClient;
 use state::MintState;
@@ -43,30 +43,34 @@ async fn main_async(opts: CmdOpts) -> surf::Result<()> {
             my_difficulty,
             approx_iter
         );
+        // repeat because wallet could be out of money
         let start = Instant::now();
-        let deadline =
-            SystemTime::now() + Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
-        let (mut tx, earlier_height): (Transaction, u64) = mint_state
-            .mint_transaction(my_difficulty)
-            .or(async move {
-                loop {
-                    let now = SystemTime::now();
-                    if let Ok(dur) = deadline.duration_since(now) {
-                        log::debug!("approx {:?} left in iteration", dur);
+        let (mut tx, earlier_height): (Transaction, u64) = repeat_fallible(|| async {
+            let deadline = SystemTime::now()
+                + Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
+            mint_state
+                .mint_transaction(my_difficulty)
+                .or(async move {
+                    loop {
+                        let now = SystemTime::now();
+                        if let Ok(dur) = deadline.duration_since(now) {
+                            log::debug!("approx {:?} left in iteration", dur);
+                        }
+                        smol::Timer::after(Duration::from_secs(60)).await;
                     }
-                    smol::Timer::after(Duration::from_secs(60)).await;
-                }
-            })
-            .await?;
+                })
+                .await
+        })
+        .await;
         let snap = repeat_fallible(|| client.snapshot()).await;
         let reward_speed = 2u128.pow(my_difficulty as u32)
             / (snap.current_header().height + 5 - earlier_height) as u128;
-        let reward = blkstructs::calculate_reward(
+        let reward = themelio_stf::calculate_reward(
             reward_speed,
             snap.current_header().dosc_speed,
             my_difficulty as u32,
         );
-        let reward_nom = blkstructs::dosc_inflate_r2n(snap.current_header().height, reward);
+        let reward_nom = themelio_stf::dosc_inflate_r2n(snap.current_header().height, reward);
         tx.outputs.push(CoinData {
             denom: Denom::NomDosc,
             value: reward_nom,
@@ -101,6 +105,7 @@ async fn repeat_fallible<T, E: std::fmt::Debug, F: Future<Output = Result<T, E>>
             Ok(val) => return val,
             Err(err) => log::debug!("retrying failed: {:?}", err),
         }
+        smol::Timer::after(Duration::from_secs(1)).await;
     }
 }
 
@@ -121,9 +126,9 @@ async fn compute_speed() -> f64 {
 async fn get_valclient(testnet: bool, connect: SocketAddr) -> anyhow::Result<ValClient> {
     let client = nodeprot::ValClient::new(
         if testnet {
-            blkstructs::NetID::Testnet
+            themelio_stf::NetID::Testnet
         } else {
-            blkstructs::NetID::Mainnet
+            themelio_stf::NetID::Mainnet
         },
         connect,
     );
