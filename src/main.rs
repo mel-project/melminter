@@ -4,11 +4,11 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use themelio_stf::{CoinData, Denom, Transaction, TxKind, melpow, melvm::Covenant};
 use cmdopts::CmdOpts;
-use nodeprot::ValClient;
 use state::MintState;
 use structopt::StructOpt;
+use themelio_nodeprot::ValClient;
+use themelio_stf::{melpow, melvm::Covenant, CoinData, Denom, Transaction, TxKind};
 mod cmdopts;
 mod state;
 use smol::prelude::*;
@@ -124,7 +124,7 @@ async fn compute_speed() -> f64 {
 }
 
 async fn get_valclient(testnet: bool, connect: SocketAddr) -> anyhow::Result<ValClient> {
-    let client = nodeprot::ValClient::new(
+    let client = themelio_nodeprot::ValClient::new(
         if testnet {
             themelio_stf::NetID::Testnet
         } else {

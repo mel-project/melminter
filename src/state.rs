@@ -1,7 +1,7 @@
 use anyhow::Context;
-use themelio_stf::{CoinData, Denom, MICRO_CONVERTER, Transaction, melpow, melvm::Covenant};
-use nodeprot::ValClient;
 use serde::{Deserialize, Serialize};
+use themelio_nodeprot::ValClient;
+use themelio_stf::{melpow, melvm::Covenant, CoinData, Denom, Transaction, MICRO_CONVERTER};
 use tmelcrypt::Ed25519SK;
 
 #[derive(Debug, Clone)]
@@ -45,7 +45,7 @@ impl MintState {
     /// Creates a partially-filled-in transaction, with the given difficulty, that's neither signed nor feed. The caller should fill in the DOSC output.
     pub async fn mint_transaction(&self, difficulty: usize) -> surf::Result<(Transaction, u64)> {
         let mut transaction = self.prepare_dummy().await?;
-        let tip_cdh = self 
+        let tip_cdh = self
             .client
             .snapshot()
             .await?
@@ -57,7 +57,8 @@ impl MintState {
             .snapshot()
             .await?
             .get_history(tip_cdh.height)
-            .await?.context("history not found")?
+            .await?
+            .context("history not found")?
             .hash();
         let chi = tmelcrypt::hash_keyed(
             &tip_header_hash,
