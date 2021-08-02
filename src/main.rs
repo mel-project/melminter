@@ -4,148 +4,93 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use anyhow::Context;
 use cmdopts::CmdOpts;
-use state::MintState;
+
+use melwallet_client::{DaemonClient, WalletClient};
 use structopt::StructOpt;
-use themelio_nodeprot::ValClient;
-use themelio_stf::{melpow, melvm::Covenant, CoinData, Denom, Transaction, TxKind};
+
 mod cmdopts;
 mod state;
+mod worker;
 use smol::prelude::*;
+use themelio_stf::{CoinData, CoinID, TxKind, MICRO_CONVERTER};
+
+use crate::worker::{Worker, WorkerConfig};
 
 fn main() -> surf::Result<()> {
     let log_conf = std::env::var("RUST_LOG").unwrap_or_else(|_| "melminter=debug,warn".into());
     std::env::set_var("RUST_LOG", log_conf);
-    let opts = CmdOpts::from_args();
+    let opts: CmdOpts = CmdOpts::from_args();
     tracing_subscriber::fmt::init();
-    smolscale::block_on(main_async(opts))
-}
+    smolscale::block_on(async move {
+        let daemon = DaemonClient::new(opts.daemon);
+        let backup_wallet = daemon
+            .get_wallet(&opts.backup_wallet)
+            .await?
+            .context("backup wallet does not exist")?;
+        // workers
+        let mut workers = vec![];
+        for worker_id in 1..=num_cpus::get_physical() {
+            log::info!("starting worker {}", worker_id);
+            let wallet_name = format!("{}{}", opts.wallet_prefix, worker_id);
+            // make sure the worker has enough money
+            let worker_wallet = match daemon.get_wallet(&wallet_name).await? {
+                Some(wallet) => wallet,
+                None => {
+                    log::info!("creating new wallet for worker {}", worker_id);
+                    daemon
+                        .create_wallet(&wallet_name, opts.testnet, None)
+                        .await?;
+                    daemon
+                        .get_wallet(&wallet_name)
+                        .await?
+                        .context("just-created wallet failed?!")?
+                }
+            };
+            worker_wallet.unlock(None).await?;
+            let worker_address = worker_wallet.summary().await?.address;
 
-async fn main_async(opts: CmdOpts) -> surf::Result<()> {
-    let mut my_speed = compute_speed().await;
-    let client = get_valclient(opts.testnet, opts.connect).await?;
-    let snap = client.snapshot().await?;
-    let max_speed = snap.current_header().dosc_speed as f64 / 30.0;
+            // Move money if wallet does not have enough money
+            if worker_wallet
+                .summary()
+                .await?
+                .detailed_balance
+                .get("6d")
+                .copied()
+                .unwrap_or(0)
+                < MICRO_CONVERTER / 10
+            {
+                log::warn!("worker {} does not have enough money, transferring 0.1 MEL from the backup wallet!", worker_id);
+                let tx = backup_wallet
+                    .prepare_transaction(
+                        TxKind::Normal,
+                        vec![],
+                        vec![CoinData {
+                            covhash: worker_address,
+                            value: MICRO_CONVERTER / 10,
+                            denom: themelio_stf::Denom::Mel,
+                            additional_data: vec![],
+                        }],
+                        None,
+                        vec![],
+                        vec![],
+                    )
+                    .await?;
+                let txhash = backup_wallet.send_tx(tx).await?;
+                log::warn!("waiting for txhash {:?}...", txhash);
+                backup_wallet.wait_transaction(txhash).await?;
+                worker_wallet.add_coin(CoinID { txhash, index: 0 }).await?;
+            }
 
-    let mint_state = MintState::new(opts.wallet_url.clone(), opts.secret_key, client.clone());
-
-    loop {
-        log::info!("** My speed: {:.3} kH/s", my_speed / 1000.0);
-        log::info!("** Max speed: {:.3} kH/s", max_speed / 1000.0);
-        log::info!(
-            "** Estimated return: {:.2} rDOSC/day",
-            my_speed * max_speed / max_speed.powi(2)
-        );
-        let my_difficulty = (my_speed * 3100.0).log2().ceil() as usize;
-        let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
-        log::info!(
-            "** Selected difficulty: {} (approx. {:?} / tx)",
-            my_difficulty,
-            approx_iter
-        );
-        // repeat because wallet could be out of money
-        let start = Instant::now();
-        let (mut tx, earlier_height): (Transaction, u64) = repeat_fallible(|| async {
-            let deadline = SystemTime::now()
-                + Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
-            mint_state
-                .mint_transaction(my_difficulty)
-                .or(async move {
-                    loop {
-                        let now = SystemTime::now();
-                        if let Ok(dur) = deadline.duration_since(now) {
-                            log::debug!("approx {:?} left in iteration", dur);
-                        }
-                        smol::Timer::after(Duration::from_secs(60)).await;
-                    }
-                })
-                .await
-        })
-        .await;
-        let snap = repeat_fallible(|| client.snapshot()).await;
-        let reward_speed = 2u128.pow(my_difficulty as u32)
-            / (snap.current_header().height + 5 - earlier_height) as u128;
-        let reward = themelio_stf::calculate_reward(
-            reward_speed,
-            snap.current_header().dosc_speed,
-            my_difficulty as u32,
-        );
-        let reward_nom = themelio_stf::dosc_inflate_r2n(snap.current_header().height, reward);
-        tx.outputs.push(CoinData {
-            denom: Denom::NomDosc,
-            value: reward_nom,
-            additional_data: vec![],
-            covhash: tx.outputs[0].covhash,
-        });
-        tx.kind = TxKind::DoscMint;
-        assert_eq!(
-            tx.scripts[0],
-            Covenant::std_ed25519_pk_new(opts.secret_key.to_public())
-        );
-        tx = tx
-            .applied_fee(snap.current_header().fee_multiplier * 2, 1000, 0)
-            .unwrap();
-        tx.sigs.clear();
-        for _ in 0..tx.inputs.len() {
-            tx = tx.signed_ed25519(opts.secret_key)
+            workers.push(Worker::start(WorkerConfig {
+                wallet: worker_wallet,
+                connect: opts.connect,
+            }));
         }
-        my_speed = 2.0f64.powi(my_difficulty as _) / start.elapsed().as_secs_f64();
-        dbg!(tx.fee);
-        // panic!("oh no");
-        mint_state.send_transaction(tx).await?;
-    }
-}
-
-// Repeats something until it stops failing
-async fn repeat_fallible<T, E: std::fmt::Debug, F: Future<Output = Result<T, E>>>(
-    mut clos: impl FnMut() -> F,
-) -> T {
-    loop {
-        match clos().await {
-            Ok(val) => return val,
-            Err(err) => log::debug!("retrying failed: {:?}", err),
+        for worker in workers {
+            worker.wait().await?;
         }
-        smol::Timer::after(Duration::from_secs(1)).await;
-    }
-}
-
-// Computes difficulty
-async fn compute_speed() -> f64 {
-    for difficulty in 1.. {
-        let start = Instant::now();
-        smol::unblock(move || melpow::Proof::generate(&[], difficulty)).await;
-        let elapsed = start.elapsed();
-        let speed = 2.0f64.powi(difficulty as _) / elapsed.as_secs_f64();
-        if elapsed.as_secs_f64() > 2.0 {
-            return speed;
-        }
-    }
-    unreachable!()
-}
-
-async fn get_valclient(testnet: bool, connect: SocketAddr) -> anyhow::Result<ValClient> {
-    let client = themelio_nodeprot::ValClient::new(
-        if testnet {
-            themelio_stf::NetID::Testnet
-        } else {
-            themelio_stf::NetID::Mainnet
-        },
-        connect,
-    );
-    if testnet {
-        client.trust(
-            2550,
-            "2b2133e34779c4043278a5d084671a7a801022605dba2721e2d164d9c1096c13"
-                .parse()
-                .unwrap(),
-        );
-    } else {
-        client.trust(
-            14146,
-            "50f5a41c6e996d36bc05b1272a59c8adb3fe3f98de70965abd2eed0c115d2108"
-                .parse()
-                .unwrap(),
-        );
-    }
-    Ok(client)
+        Ok(())
+    })
 }

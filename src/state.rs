@@ -1,13 +1,15 @@
 use anyhow::Context;
+use melwallet_client::WalletClient;
 use serde::{Deserialize, Serialize};
 use themelio_nodeprot::ValClient;
-use themelio_stf::{melpow, melvm::Covenant, CoinData, Denom, Transaction, MICRO_CONVERTER};
+use themelio_stf::{
+    melpow, melvm::Covenant, CoinData, Denom, Transaction, TxKind, MICRO_CONVERTER,
+};
 use tmelcrypt::Ed25519SK;
 
 #[derive(Debug, Clone)]
 pub struct MintState {
-    wallet_url: String,
-    my_sk: Ed25519SK,
+    wallet: WalletClient,
     client: ValClient,
 }
 
@@ -18,28 +20,29 @@ struct PrepareReq {
 }
 
 impl MintState {
-    pub fn new(wallet_url: String, my_sk: Ed25519SK, client: ValClient) -> Self {
-        Self {
-            wallet_url,
-            my_sk,
-            client,
-        }
+    pub fn new(wallet: WalletClient, client: ValClient) -> Self {
+        Self { wallet, client }
     }
 
     async fn prepare_dummy(&self) -> surf::Result<Transaction> {
-        let req = PrepareReq {
-            signing_key: hex::encode(&self.my_sk.0),
-            outputs: vec![CoinData {
-                covhash: Covenant::std_ed25519_pk_new(self.my_sk.to_public()).hash(),
-                denom: Denom::Mel,
-                value: MICRO_CONVERTER,
-                additional_data: vec![],
-            }],
-        };
-        let mut res = surf::post(format!("{}/prepare-tx", self.wallet_url))
-            .body(serde_json::to_vec(&req).unwrap())
+        let my_address = self.wallet.summary().await?.address;
+        let res = self
+            .wallet
+            .prepare_transaction(
+                TxKind::DoscMint,
+                vec![],
+                vec![CoinData {
+                    covhash: my_address,
+                    denom: Denom::Mel,
+                    value: 1,
+                    additional_data: vec![],
+                }],
+                None,
+                vec![],
+                vec![],
+            )
             .await?;
-        Ok(res.body_json().await?)
+        Ok(res)
     }
 
     /// Creates a partially-filled-in transaction, with the given difficulty, that's neither signed nor feed. The caller should fill in the DOSC output.
@@ -52,6 +55,9 @@ impl MintState {
             .get_coin(transaction.inputs[0])
             .await?
             .context("dummy transaction's input spent from behind our back")?;
+        // log::debug!("tip_cdh = {:#?}", tip_cdh);
+        let snapshot = self.client.snapshot().await?;
+        // log::debug!("snapshot height = {}", snapshot.current_header().height);
         let tip_header_hash = self
             .client
             .snapshot()
@@ -76,11 +82,21 @@ impl MintState {
         Ok((transaction, tip_cdh.height))
     }
 
-    /// Sends a transaction out.
-    pub async fn send_transaction(&self, transaction: Transaction) -> surf::Result<()> {
-        surf::post(format!("{}/send-tx", self.wallet_url))
-            .body(serde_json::to_vec(&transaction).unwrap())
+    /// Sends a transaction out. What this actually does is to re-prepare another transaction with the same inputs, outputs, and data, so that the wallet can sign it properly.
+    pub async fn send_resigned_transaction(&self, transaction: Transaction) -> surf::Result<()> {
+        let resigned = self
+            .wallet
+            .prepare_transaction(
+                TxKind::DoscMint,
+                transaction.inputs.clone(),
+                transaction.outputs.clone(),
+                None,
+                transaction.data.clone(),
+                vec![Denom::NomDosc],
+            )
             .await?;
+        let txhash = self.wallet.send_tx(resigned).await?;
+        self.wallet.wait_transaction(txhash).await?;
         Ok(())
     }
 }
