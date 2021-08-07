@@ -11,13 +11,14 @@ use smol::{
     prelude::*,
 };
 use themelio_nodeprot::ValClient;
-use themelio_stf::{melpow, CoinData, Denom, NetID, Transaction};
+use themelio_stf::{melpow, CoinData, Denom, NetID, Transaction, MICRO_CONVERTER};
 
 /// Worker configuration
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
     pub wallet: WalletClient,
     pub connect: SocketAddr,
+    pub name: String,
 }
 
 /// Represents a worker.
@@ -44,76 +45,102 @@ impl Worker {
 }
 
 async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result<()> {
-    let mut my_speed = compute_speed().await;
-    let client = get_valclient(
-        opts.wallet.summary().await?.network == NetID::Testnet,
-        opts.connect,
-    )
-    .await?;
-    let snap = client.snapshot().await?;
-    let max_speed = snap.current_header().dosc_speed as f64 / 30.0;
+    repeat_fallible(|| async {
+        let mut my_speed = compute_speed().await;
+        let client = get_valclient(
+            opts.wallet.summary().await?.network == NetID::Testnet,
+            opts.connect,
+        )
+        .await?;
+        let snap = client.snapshot().await?;
+        let max_speed = snap.current_header().dosc_speed as f64 / 30.0;
 
-    let mint_state = MintState::new(opts.wallet.clone(), client.clone());
+        let mint_state = MintState::new(opts.wallet.clone(), client.clone());
 
-    loop {
-        // turn off gracefully
-        if recv_stop.try_recv().is_ok() {
-            return Ok(());
-        }
-        log::info!("** My speed: {:.3} kH/s", my_speed / 1000.0);
-        log::info!("** Max speed: {:.3} kH/s", max_speed / 1000.0);
-        log::info!(
-            "** Estimated return: {:.2} rDOSC/day",
-            my_speed * max_speed / max_speed.powi(2)
-        );
-        let my_difficulty = (my_speed * 3100.0).log2().ceil() as usize;
-        let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
-        log::info!(
-            "** Selected difficulty: {} (approx. {:?} / tx)",
-            my_difficulty,
-            approx_iter
-        );
-        // repeat because wallet could be out of money
-        let start = Instant::now();
-        let (mut tx, earlier_height): (Transaction, u64) = repeat_fallible(|| async {
-            let deadline = SystemTime::now()
-                + Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
-            mint_state
-                .mint_transaction(my_difficulty)
-                .or(async move {
-                    loop {
-                        let now = SystemTime::now();
-                        if let Ok(dur) = deadline.duration_since(now) {
-                            log::debug!("approx {:?} left in iteration", dur);
+        loop {
+            // turn off gracefully
+            if recv_stop.try_recv().is_ok() {
+                return Ok::<_, surf::Error>(());
+            }
+
+            // If we have more than 0.1 nomDOSC, convert it all to Mel.
+            let our_doscs = opts
+                .wallet
+                .summary()
+                .await?
+                .detailed_balance
+                .get("64")
+                .copied()
+                .unwrap_or_default();
+            if dbg!(our_doscs) > MICRO_CONVERTER / 10 {
+                log::info!("** [{}] CONVERTING {} µnomDOSC!", opts.name, our_doscs);
+                mint_state.convert_doscs(our_doscs).await?;
+            }
+
+            log::info!("** [{}] My speed: {:.3} kH/s", opts.name, my_speed / 1000.0);
+            log::info!(
+                "** [{}]  Max speed: {:.3} kH/s",
+                opts.name,
+                max_speed / 1000.0
+            );
+            log::info!(
+                "** [{}] Estimated return: {:.2} rDOSC/day",
+                opts.name,
+                my_speed * max_speed / max_speed.powi(2)
+            );
+            let my_difficulty = (my_speed * 3600.0).log2().ceil() as usize;
+            let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
+            log::info!(
+                "** [{}] Selected difficulty: {} (approx. {:?} / tx)",
+                opts.name,
+                my_difficulty,
+                approx_iter
+            );
+            // repeat because wallet could be out of money
+            let start = Instant::now();
+            let (mut tx, earlier_height): (Transaction, u64) = repeat_fallible(|| async {
+                let deadline = SystemTime::now()
+                    + Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
+                mint_state
+                    .mint_transaction(my_difficulty)
+                    .or(async move {
+                        loop {
+                            let now = SystemTime::now();
+                            if let Ok(dur) = deadline.duration_since(now) {
+                                log::debug!("approx {:?} left in iteration", dur);
+                            }
+                            smol::Timer::after(Duration::from_secs(60)).await;
                         }
-                        smol::Timer::after(Duration::from_secs(60)).await;
-                    }
-                })
-                .await
-        })
-        .await;
-        let snap = repeat_fallible(|| client.snapshot()).await;
-        let reward_speed = 2u128.pow(my_difficulty as u32)
-            / (snap.current_header().height + 5 - earlier_height) as u128;
-        let reward = themelio_stf::calculate_reward(
-            reward_speed,
-            snap.current_header().dosc_speed,
-            my_difficulty as u32,
-        );
-        let reward_nom = themelio_stf::dosc_inflate_r2n(snap.current_header().height, reward);
-        tx.outputs.push(CoinData {
-            denom: Denom::NomDosc,
-            value: reward_nom,
-            additional_data: vec![],
-            covhash: tx.outputs[0].covhash,
-        });
-        my_speed = 2.0f64.powi(my_difficulty as _) / start.elapsed().as_secs_f64();
-        log::info!(
-            "** SUCCEEDED in minting a transaction producing {} µnomDOSC",
-            reward_nom,
-        );
-        mint_state.send_resigned_transaction(tx).await?;
-    }
+                    })
+                    .await
+            })
+            .await;
+            let snap = repeat_fallible(|| client.snapshot()).await;
+            let reward_speed = 2u128.pow(my_difficulty as u32)
+                / (snap.current_header().height + 5 - earlier_height) as u128;
+            let reward = themelio_stf::calculate_reward(
+                reward_speed,
+                snap.current_header().dosc_speed,
+                my_difficulty as u32,
+            );
+            let reward_nom = themelio_stf::dosc_inflate_r2n(snap.current_header().height, reward);
+            tx.outputs.push(CoinData {
+                denom: Denom::NomDosc,
+                value: reward_nom,
+                additional_data: vec![],
+                covhash: opts.wallet.summary().await?.address,
+            });
+            my_speed = 2.0f64.powi(my_difficulty as _) / start.elapsed().as_secs_f64();
+            log::info!(
+                "** [{}] SUCCEEDED in minting a transaction producing {} µnomDOSC",
+                opts.name,
+                reward_nom,
+            );
+            mint_state.send_resigned_transaction(tx).await?;
+        }
+    })
+    .await;
+    Ok(())
 }
 
 // Repeats something until it stops failing

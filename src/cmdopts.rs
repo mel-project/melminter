@@ -1,7 +1,8 @@
 use std::net::SocketAddr;
 
 use structopt::StructOpt;
-use tmelcrypt::Ed25519SK;
+// use tmelcrypt::Ed25519SK;
+
 #[derive(Debug, StructOpt, Clone)]
 pub struct CmdOpts {
     #[structopt(long, default_value = "127.0.0.1:11773")]

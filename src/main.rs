@@ -1,19 +1,13 @@
-use std::{
-    future::Future,
-    net::SocketAddr,
-    time::{Duration, Instant, SystemTime},
-};
-
 use anyhow::Context;
 use cmdopts::CmdOpts;
 
-use melwallet_client::{DaemonClient, WalletClient};
+use melwallet_client::DaemonClient;
 use structopt::StructOpt;
 
 mod cmdopts;
 mod state;
 mod worker;
-use smol::prelude::*;
+// use smol::prelude::*;
 use themelio_stf::{CoinData, CoinID, TxKind, MICRO_CONVERTER};
 
 use crate::worker::{Worker, WorkerConfig};
@@ -61,14 +55,14 @@ fn main() -> surf::Result<()> {
                 .unwrap_or(0)
                 < MICRO_CONVERTER / 10
             {
-                log::warn!("worker {} does not have enough money, transferring 0.1 MEL from the backup wallet!", worker_id);
+                log::warn!("worker {} does not have enough money, transferring money from the backup wallet!", worker_id);
                 let tx = backup_wallet
                     .prepare_transaction(
                         TxKind::Normal,
                         vec![],
                         vec![CoinData {
                             covhash: worker_address,
-                            value: MICRO_CONVERTER / 10,
+                            value: MICRO_CONVERTER / 5,
                             denom: themelio_stf::Denom::Mel,
                             additional_data: vec![],
                         }],
@@ -86,11 +80,9 @@ fn main() -> surf::Result<()> {
             workers.push(Worker::start(WorkerConfig {
                 wallet: worker_wallet,
                 connect: opts.connect,
+                name: format!("worker-{}", worker_id),
             }));
         }
-        for worker in workers {
-            worker.wait().await?;
-        }
-        Ok(())
+        smol::future::pending().await
     })
 }

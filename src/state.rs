@@ -2,10 +2,7 @@ use anyhow::Context;
 use melwallet_client::WalletClient;
 use serde::{Deserialize, Serialize};
 use themelio_nodeprot::ValClient;
-use themelio_stf::{
-    melpow, melvm::Covenant, CoinData, Denom, Transaction, TxKind, MICRO_CONVERTER,
-};
-use tmelcrypt::Ed25519SK;
+use themelio_stf::{melpow, CoinData, Denom, PoolKey, Transaction, TxKind};
 
 #[derive(Debug, Clone)]
 pub struct MintState {
@@ -38,7 +35,7 @@ impl MintState {
                     additional_data: vec![],
                 }],
                 None,
-                vec![],
+                vec![0u8; 65536],
                 vec![],
             )
             .await?;
@@ -58,10 +55,7 @@ impl MintState {
         // log::debug!("tip_cdh = {:#?}", tip_cdh);
         let snapshot = self.client.snapshot().await?;
         // log::debug!("snapshot height = {}", snapshot.current_header().height);
-        let tip_header_hash = self
-            .client
-            .snapshot()
-            .await?
+        let tip_header_hash = snapshot
             .get_history(tip_cdh.height)
             .await?
             .context("history not found")?
@@ -78,6 +72,7 @@ impl MintState {
             .verify(&chi, difficulty as usize));
 
         transaction.data = stdcode::serialize(&(difficulty, proof_bytes)).unwrap();
+        transaction.outputs.clear();
 
         Ok((transaction, tip_cdh.height))
     }
@@ -96,6 +91,30 @@ impl MintState {
             )
             .await?;
         let txhash = self.wallet.send_tx(resigned).await?;
+        self.wallet.wait_transaction(txhash).await?;
+        Ok(())
+    }
+
+    /// Converts a given number of doscs to mel.
+    pub async fn convert_doscs(&self, doscs: u128) -> surf::Result<()> {
+        let my_address = self.wallet.summary().await?.address;
+        let tx = self
+            .wallet
+            .prepare_transaction(
+                TxKind::Swap,
+                vec![],
+                vec![CoinData {
+                    covhash: my_address,
+                    value: doscs,
+                    denom: Denom::NomDosc,
+                    additional_data: vec![],
+                }],
+                None,
+                PoolKey::new(Denom::Mel, Denom::NomDosc).to_bytes(),
+                vec![],
+            )
+            .await?;
+        let txhash = self.wallet.send_tx(tx).await?;
         self.wallet.wait_transaction(txhash).await?;
         Ok(())
     }
