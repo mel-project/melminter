@@ -3,13 +3,12 @@ use cmdopts::CmdOpts;
 
 use melwallet_client::DaemonClient;
 use structopt::StructOpt;
+use themelio_structs::{CoinData, CoinID, CoinValue, Denom, TxKind};
 
 mod cmdopts;
 mod state;
 mod worker;
 // use smol::prelude::*;
-use themelio_stf::{CoinData, CoinID, TxKind, MICRO_CONVERTER};
-
 use crate::worker::{Worker, WorkerConfig};
 
 fn main() -> surf::Result<()> {
@@ -52,8 +51,8 @@ fn main() -> surf::Result<()> {
                 .detailed_balance
                 .get("6d")
                 .copied()
-                .unwrap_or(0)
-                < MICRO_CONVERTER / 10
+                .unwrap_or(CoinValue(0))
+                < CoinValue::from_millions(1u64) / 10
             {
                 log::warn!("worker {} does not have enough money, transferring money from the backup wallet!", worker_id);
                 let tx = backup_wallet
@@ -62,11 +61,11 @@ fn main() -> surf::Result<()> {
                         vec![],
                         vec![CoinData {
                             covhash: worker_address,
-                            value: MICRO_CONVERTER / 5,
-                            denom: themelio_stf::Denom::Mel,
+                            value: CoinValue::from_millions(1u64) / 5,
+                            denom: Denom::Mel,
                             additional_data: vec![],
                         }],
-                        None,
+                        vec![],
                         vec![],
                         vec![],
                     )

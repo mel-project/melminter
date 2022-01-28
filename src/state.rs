@@ -2,9 +2,10 @@ use anyhow::Context;
 use melwallet_client::WalletClient;
 use serde::{Deserialize, Serialize};
 use themelio_nodeprot::ValClient;
-use themelio_stf::{melpow, CoinData, Denom, PoolKey, Transaction, TxKind};
+use themelio_stf::{melpow, PoolKey};
+use themelio_structs::{BlockHeight, CoinData, CoinValue, Denom, Transaction, TxKind};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MintState {
     wallet: WalletClient,
     client: ValClient,
@@ -31,10 +32,10 @@ impl MintState {
                 vec![CoinData {
                     covhash: my_address,
                     denom: Denom::Mel,
-                    value: 1,
+                    value: CoinValue(1),
                     additional_data: vec![],
                 }],
-                None,
+                vec![],
                 vec![0u8; 65536],
                 vec![],
             )
@@ -43,7 +44,10 @@ impl MintState {
     }
 
     /// Creates a partially-filled-in transaction, with the given difficulty, that's neither signed nor feed. The caller should fill in the DOSC output.
-    pub async fn mint_transaction(&self, difficulty: usize) -> surf::Result<(Transaction, u64)> {
+    pub async fn mint_transaction(
+        &self,
+        difficulty: usize,
+    ) -> surf::Result<(Transaction, BlockHeight)> {
         let mut transaction = self.prepare_dummy().await?;
         let tip_cdh = self
             .client
@@ -85,9 +89,9 @@ impl MintState {
                 TxKind::DoscMint,
                 transaction.inputs.clone(),
                 transaction.outputs.clone(),
-                None,
+                vec![],
                 transaction.data.clone(),
-                vec![Denom::NomDosc],
+                vec![Denom::Erg],
             )
             .await?;
         let txhash = self.wallet.send_tx(resigned).await?;
@@ -96,7 +100,7 @@ impl MintState {
     }
 
     /// Converts a given number of doscs to mel.
-    pub async fn convert_doscs(&self, doscs: u128) -> surf::Result<()> {
+    pub async fn convert_doscs(&self, doscs: CoinValue) -> surf::Result<()> {
         let my_address = self.wallet.summary().await?.address;
         let tx = self
             .wallet
@@ -106,11 +110,11 @@ impl MintState {
                 vec![CoinData {
                     covhash: my_address,
                     value: doscs,
-                    denom: Denom::NomDosc,
+                    denom: Denom::Erg,
                     additional_data: vec![],
                 }],
-                None,
-                PoolKey::new(Denom::Mel, Denom::NomDosc).to_bytes(),
+                vec![],
+                PoolKey::new(Denom::Mel, Denom::Erg).to_bytes(),
                 vec![],
             )
             .await?;

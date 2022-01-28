@@ -11,7 +11,8 @@ use smol::{
     prelude::*,
 };
 use themelio_nodeprot::ValClient;
-use themelio_stf::{melpow, CoinData, Denom, NetID, Transaction, MICRO_CONVERTER};
+use themelio_stf::melpow;
+use themelio_structs::{BlockHeight, CoinData, CoinValue, Denom, NetID, Transaction};
 
 /// Worker configuration
 #[derive(Clone, Debug)]
@@ -72,8 +73,8 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 .get("64")
                 .copied()
                 .unwrap_or_default();
-            if dbg!(our_doscs) > MICRO_CONVERTER / 10 {
-                log::info!("** [{}] CONVERTING {} µnomDOSC!", opts.name, our_doscs);
+            if our_doscs > CoinValue::from_millions(1u64) / 10 {
+                log::info!("** [{}] CONVERTING {} ERG!", opts.name, our_doscs);
                 mint_state.convert_doscs(our_doscs).await?;
             }
 
@@ -98,7 +99,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
             );
             // repeat because wallet could be out of money
             let start = Instant::now();
-            let (mut tx, earlier_height): (Transaction, u64) = repeat_fallible(|| async {
+            let (mut tx, earlier_height): (Transaction, BlockHeight) = repeat_fallible(|| async {
                 let deadline = SystemTime::now()
                     + Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
                 mint_state
@@ -117,22 +118,22 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
             .await;
             let snap = repeat_fallible(|| client.snapshot()).await;
             let reward_speed = 2u128.pow(my_difficulty as u32)
-                / (snap.current_header().height + 5 - earlier_height) as u128;
+                / (snap.current_header().height.0 + 5 - earlier_height.0) as u128;
             let reward = themelio_stf::calculate_reward(
                 reward_speed,
                 snap.current_header().dosc_speed,
                 my_difficulty as u32,
             );
-            let reward_nom = themelio_stf::dosc_inflate_r2n(snap.current_header().height, reward);
+            let reward_nom = themelio_stf::dosc_to_erg(snap.current_header().height, reward);
             tx.outputs.push(CoinData {
-                denom: Denom::NomDosc,
-                value: reward_nom,
+                denom: Denom::Erg,
+                value: reward_nom.into(),
                 additional_data: vec![],
                 covhash: opts.wallet.summary().await?.address,
             });
             my_speed = 2.0f64.powi(my_difficulty as _) / start.elapsed().as_secs_f64();
             log::info!(
-                "** [{}] SUCCEEDED in minting a transaction producing {} µnomDOSC",
+                "** [{}] SUCCEEDED in minting a transaction producing {} ERG",
                 opts.name,
                 reward_nom,
             );
@@ -173,26 +174,16 @@ async fn compute_speed() -> f64 {
 async fn get_valclient(testnet: bool, connect: SocketAddr) -> anyhow::Result<ValClient> {
     let client = themelio_nodeprot::ValClient::new(
         if testnet {
-            themelio_stf::NetID::Testnet
+            NetID::Testnet
         } else {
-            themelio_stf::NetID::Mainnet
+            NetID::Mainnet
         },
         connect,
     );
     if testnet {
-        client.trust(
-            2550,
-            "2b2133e34779c4043278a5d084671a7a801022605dba2721e2d164d9c1096c13"
-                .parse()
-                .unwrap(),
-        );
+        client.trust(themelio_bootstrap::checkpoint_height(NetID::Testnet).unwrap());
     } else {
-        client.trust(
-            14146,
-            "50f5a41c6e996d36bc05b1272a59c8adb3fe3f98de70965abd2eed0c115d2108"
-                .parse()
-                .unwrap(),
-        );
+        client.trust(themelio_bootstrap::checkpoint_height(NetID::Mainnet).unwrap());
     }
     Ok(client)
 }
