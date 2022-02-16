@@ -12,7 +12,9 @@ use smol::{
 };
 use themelio_nodeprot::ValClient;
 use themelio_stf::melpow;
-use themelio_structs::{BlockHeight, CoinData, CoinValue, Denom, NetID, Transaction};
+use themelio_structs::{
+    BlockHeight, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, Transaction,
+};
 
 /// Worker configuration
 #[derive(Clone, Debug)]
@@ -48,11 +50,8 @@ impl Worker {
 async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result<()> {
     repeat_fallible(|| async {
         let mut my_speed = compute_speed().await;
-        let client = get_valclient(
-            opts.wallet.summary().await?.network == NetID::Testnet,
-            opts.connect,
-        )
-        .await?;
+        let is_testnet = opts.wallet.summary().await?.network == NetID::Testnet;
+        let client = get_valclient(is_testnet, opts.connect).await?;
         let snap = client.snapshot().await?;
         let max_speed = snap.current_header().dosc_speed as f64 / 30.0;
 
@@ -64,7 +63,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 return Ok::<_, surf::Error>(());
             }
 
-            // If we have more than 0.1 nomDOSC, convert it all to Mel.
+            // If we any erg, convert it all to mel.
             let our_doscs = opts
                 .wallet
                 .summary()
@@ -73,7 +72,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 .get("64")
                 .copied()
                 .unwrap_or_default();
-            if our_doscs > CoinValue::from_millions(1u64) / 10 {
+            if our_doscs > CoinValue(0) {
                 log::info!("** [{}] CONVERTING {} ERG!", opts.name, our_doscs);
                 mint_state.convert_doscs(our_doscs).await?;
             }
@@ -84,10 +83,11 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 opts.name,
                 max_speed / 1000.0
             );
+
             log::info!(
-                "** [{}] Estimated return: {:.2} rDOSC/day",
+                "** [{}] Estimated daily return: {:.2} DOSC",
                 opts.name,
-                my_speed * max_speed / max_speed.powi(2)
+                my_speed * max_speed / max_speed.powi(2),
             );
             let my_difficulty = (my_speed * 3600.0).log2().ceil() as usize;
             let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
@@ -99,11 +99,11 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
             );
             // repeat because wallet could be out of money
             let start = Instant::now();
-            let (mut tx, earlier_height): (Transaction, BlockHeight) = repeat_fallible(|| async {
+            let batch: Vec<(CoinID, CoinDataHeight, Vec<u8>)> = repeat_fallible(|| async {
                 let deadline = SystemTime::now()
                     + Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
                 mint_state
-                    .mint_transaction(my_difficulty)
+                    .mint_batch(my_difficulty)
                     .or(async move {
                         loop {
                             let now = SystemTime::now();
@@ -116,28 +116,50 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     .await
             })
             .await;
-            let snap = repeat_fallible(|| client.snapshot()).await;
-            let reward_speed = 2u128.pow(my_difficulty as u32)
-                / (snap.current_header().height.0 + 5 - earlier_height.0) as u128;
-            let reward = themelio_stf::calculate_reward(
-                reward_speed,
-                snap.current_header().dosc_speed,
-                my_difficulty as u32,
-            );
-            let reward_nom = themelio_stf::dosc_to_erg(snap.current_header().height, reward);
-            tx.outputs.push(CoinData {
-                denom: Denom::Erg,
-                value: reward_nom.into(),
-                additional_data: vec![],
-                covhash: opts.wallet.summary().await?.address,
-            });
-            my_speed = 2.0f64.powi(my_difficulty as _) / start.elapsed().as_secs_f64();
-            log::info!(
-                "** [{}] SUCCEEDED in minting a transaction producing {} ERG",
-                opts.name,
-                reward_nom,
-            );
-            mint_state.send_resigned_transaction(tx).await?;
+            log::info!("built batch of {} proofs!", batch.len());
+            for (coin, data, proof) in batch {
+                let proof = &proof;
+                repeat_fallible(|| async {
+                    let snap = client.snapshot().await?;
+                    let reward_speed = 2u128.pow(my_difficulty as u32)
+                        / (snap.current_header().height.0 + 5 - data.height.0) as u128;
+                    let reward = themelio_stf::calculate_reward(
+                        reward_speed,
+                        snap.current_header().dosc_speed,
+                        my_difficulty as u32,
+                    );
+                    let reward_ergs =
+                        themelio_stf::dosc_to_erg(snap.current_header().height, reward);
+                    mint_state
+                        .send_mint_transaction(coin, proof.clone(), reward_ergs.into())
+                        .await?;
+                    log::info!("MINTED {} ERG", reward_ergs);
+                    Ok::<_, surf::Error>(())
+                })
+                .await;
+            }
+            // let snap = repeat_fallible(|| client.snapshot()).await;
+            // let reward_speed = 2u128.pow(my_difficulty as u32)
+            //     / (snap.current_header().height.0 + 5 - earlier_height.0) as u128;
+            // let reward = themelio_stf::calculate_reward(
+            //     reward_speed,
+            //     snap.current_header().dosc_speed,
+            //     my_difficulty as u32,
+            // );
+            // let reward_nom = themelio_stf::dosc_to_erg(snap.current_header().height, reward);
+            // tx.outputs.push(CoinData {
+            //     denom: Denom::Erg,
+            //     value: reward_nom.into(),
+            //     additional_data: vec![],
+            //     covhash: opts.wallet.summary().await?.address,
+            // });
+            // my_speed = 2.0f64.powi(my_difficulty as _) / start.elapsed().as_secs_f64();
+            // log::info!(
+            //     "** [{}] SUCCEEDED in minting a transaction producing {} ERG",
+            //     opts.name,
+            //     reward_nom,
+            // );
+            // mint_state.send_resigned_transaction(tx).await?;
         }
     })
     .await;

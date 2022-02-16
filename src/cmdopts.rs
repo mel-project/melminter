@@ -21,7 +21,7 @@ pub struct CmdOpts {
     /// Is this a testnet wallet
     pub testnet: bool,
 
-    #[structopt(long, default_value="209.50.58.43:11814")]
+    #[structopt(long, default_value = "209.50.58.43:11814")]
     /// Where to connect
     pub connect: SocketAddr,
 }
