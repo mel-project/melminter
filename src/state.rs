@@ -127,7 +127,7 @@ impl MintState {
                 (
                     tip_cdh,
                     melpow::Proof::generate_with_progress(&chi, difficulty, |progress| {
-                        if fastrand::f64() < 0.0001 {
+                        if fastrand::f64() < 0.00001 {
                             log::info!("thread {} at {:.3}%", idx, progress * 100.0);
                         }
                     }),
