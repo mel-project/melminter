@@ -150,12 +150,18 @@ impl MintState {
         proof: Vec<u8>,
         ergs: CoinValue,
     ) -> surf::Result<()> {
+        let own_cov = self.wallet.summary().await?.address;
         let tx = self
             .wallet
             .prepare_transaction(
                 TxKind::DoscMint,
                 vec![seed],
-                vec![],
+                vec![CoinData {
+                    denom: Denom::Erg,
+                    value: ergs,
+                    additional_data: vec![],
+                    covhash: own_cov,
+                }],
                 vec![],
                 proof,
                 vec![Denom::Erg],
