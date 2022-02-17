@@ -105,12 +105,7 @@ impl MintState {
         let seeds = self.get_seeds().await?;
         let on_progress = Arc::new(on_progress);
         let mut proofs = Vec::new();
-        for (idx, seed) in seeds
-            .iter()
-            .copied()
-            .take(num_cpus::get_physical())
-            .enumerate()
-        {
+        for (idx, seed) in seeds.iter().copied().take(num_cpus::get()).enumerate() {
             let tip_cdh = self
                 .client
                 .snapshot()
