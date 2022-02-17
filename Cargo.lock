@@ -508,6 +508,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1db59621ec70f09c5e9b597b220c7a2b43611f4710dc03ceb8748637775692c"
 
 [[package]]
+name = "cassowary"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df8670b8c7b9dae1793364eafadf7239c40d669904660c5960d74cfd80b46a53"
+
+[[package]]
 name = "catvec"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -702,6 +708,7 @@ checksum = "c85525306c4291d1b73ce93c8acf9c339f9b213aef6c1d85c3830cbf1c16325c"
 dependencies = [
  "bitflags",
  "crossterm_winapi",
+ "futures-core",
  "libc",
  "mio",
  "parking_lot 0.11.2",
@@ -726,7 +733,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a05e035b986ed55343b748f978fd8d2508dbab8492ef228aa7896735b1d51931"
 dependencies = [
  "ansi_term",
+ "async-channel",
  "crossterm",
+ "futures-channel",
+ "futures-core",
+ "futures-lite",
+ "tui",
+ "tui-react",
 ]
 
 [[package]]
@@ -1404,6 +1417,12 @@ name = "httparse"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9100414882e15fb7feccb4897e5f0ff0ff1ca7d1a86a23208ada4d7a18e6c6c4"
+
+[[package]]
+name = "human_format"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86cce260d758a9aa3d7c4b99d55c815a540f8a37514ba6046ab6be402a157cb0"
 
 [[package]]
 name = "humantime"
@@ -2109,11 +2128,18 @@ version = "18.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ffc7d8b2f87fc3eb2bc6a3cee54f81eee83446ebb125f33c91df58ba1c00e30"
 dependencies = [
+ "async-io",
  "crosstermion",
  "dashmap 5.1.0",
+ "futures-core",
+ "futures-lite",
+ "human_format",
  "humantime",
  "log",
  "parking_lot 0.11.2",
+ "tui",
+ "tui-react",
+ "unicode-segmentation",
  "unicode-width",
 ]
 
@@ -3138,6 +3164,31 @@ dependencies = [
  "thread_local",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "tui"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23ed0a32c88b039b73f1b6c5acbd0554bfa5b6be94467375fd947c4de3a02271"
+dependencies = [
+ "bitflags",
+ "cassowary",
+ "crossterm",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
+name = "tui-react"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a0d3e9b9c7dfdad4919ee6fa65d3a13b742c7791f58e861f1d0b400648d43ed"
+dependencies = [
+ "log",
+ "tui",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

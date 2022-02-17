@@ -24,7 +24,6 @@ fn main() -> surf::Result<()> {
     let dash_root = Tree::default();
     let dash_options = line::Options {
         keep_running_if_progress_is_empty: true,
-        throughput: true,
         ..Default::default()
     }
     .auto_configure(StreamKind::Stdout);
