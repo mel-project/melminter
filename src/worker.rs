@@ -110,7 +110,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                                 child
                             });
                             subworker.show_throughput(start);
-                            subworker.set(((1 << my_difficulty) as f64 * b) as usize);
+                            subworker.set((dbg!((1 << my_difficulty) as f64) * b) as usize);
                         })
                         .await?;
                     Ok::<_, surf::Error>(res)
