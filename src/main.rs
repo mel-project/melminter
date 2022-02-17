@@ -67,7 +67,7 @@ fn main() -> surf::Result<()> {
             .get("6d")
             .copied()
             .unwrap_or(CoinValue(0))
-            < CoinValue::from_millions(1u64) / 4
+            < CoinValue::from_millions(1u64) / 10
         {
             let mut evt = dash_root.add_child("moving money from the backup wallet");
             evt.init(None, Some(Unit::from("")));
@@ -77,7 +77,7 @@ fn main() -> surf::Result<()> {
                     vec![],
                     vec![CoinData {
                         covhash: worker_address,
-                        value: CoinValue::from_millions(1u64) / 5,
+                        value: CoinValue::from_millions(1u64) / 10,
                         denom: Denom::Mel,
                         additional_data: vec![],
                     }],
