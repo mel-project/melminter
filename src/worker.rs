@@ -108,7 +108,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                                 child.init(Some(1 << my_difficulty), Some(Unit::from("hashes")));
                                 child
                             });
-                            subworker.set(((1 << my_difficulty) as f64 * dbg!(b)) as usize);
+                            subworker.set(dbg!((1 << my_difficulty) as f64 * b) as usize);
                         })
                         .await?;
                     Ok::<_, surf::Error>(res)
