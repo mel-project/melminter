@@ -8,7 +8,7 @@ use std::{
 use crate::state::MintState;
 use dashmap::DashMap;
 use melwallet_client::WalletClient;
-use prodash::{messages::MessageLevel, Progress, Root, Unit};
+use prodash::{messages::MessageLevel, unit::display::Mode, Progress, Root, Unit};
 use smol::channel::{Receiver, Sender};
 use themelio_nodeprot::ValClient;
 use themelio_stf::melpow;
@@ -107,10 +107,15 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                             let mut subworker = subworkers.entry(a).or_insert_with(|| {
                                 let mut child =
                                     worker.lock().unwrap().add_child(format!("subworker {}", a));
-                                child.init(Some(total), Some(Unit::from("kH")));
+                                child.init(
+                                    Some(total),
+                                    Some(prodash::unit::dynamic_and_mode(
+                                        "kH",
+                                        Mode::with_throughput(),
+                                    )),
+                                );
                                 child
                             });
-                            subworker.show_throughput(start);
                             subworker.set(((total as f64) * b) as usize);
                         })
                         .await?;
