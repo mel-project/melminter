@@ -7,7 +7,7 @@ use stdcode::StdcodeSerializeExt;
 use themelio_nodeprot::ValClient;
 use themelio_stf::{melpow, PoolKey};
 use themelio_structs::{
-    BlockHeight, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, Transaction, TxKind,
+     CoinData, CoinDataHeight, CoinID, CoinValue, Denom, Transaction, TxKind,
 };
 
 #[derive(Clone)]

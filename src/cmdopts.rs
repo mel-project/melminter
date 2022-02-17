@@ -16,12 +16,4 @@ pub struct CmdOpts {
     #[structopt(long)]
     /// Which wallet to "draw" from when the melminter runs out of fee-paying mels.
     pub backup_wallet: String,
-
-    #[structopt(long)]
-    /// Is this a testnet wallet
-    pub testnet: bool,
-
-    #[structopt(long, default_value = "209.50.58.43:11814")]
-    /// Where to connect
-    pub connect: SocketAddr,
 }

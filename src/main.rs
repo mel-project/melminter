@@ -9,7 +9,7 @@ use prodash::{
     Tree, Unit,
 };
 use structopt::StructOpt;
-use themelio_structs::{CoinData, CoinID, CoinValue, Denom, TxKind};
+use themelio_structs::{CoinData, CoinID, CoinValue, Denom, NetID, TxKind};
 
 mod cmdopts;
 mod state;
@@ -48,7 +48,11 @@ fn main() -> surf::Result<()> {
                 evt.init(None, None);
                 log::info!("creating new wallet");
                 daemon
-                    .create_wallet(dbg!(&wallet_name), opts.testnet, None)
+                    .create_wallet(
+                        dbg!(&wallet_name),
+                        backup_wallet.summary().await?.network == NetID::Testnet,
+                        None,
+                    )
                     .await?;
                 daemon
                     .get_wallet(&wallet_name)
@@ -94,7 +98,8 @@ fn main() -> surf::Result<()> {
 
         workers.push(Worker::start(WorkerConfig {
             wallet: worker_wallet,
-            connect: opts.connect,
+            connect: themelio_bootstrap::bootstrap_routes(backup_wallet.summary().await?.network)
+                [0],
             name: "".into(),
             tree: dash_root.clone(),
         }));
