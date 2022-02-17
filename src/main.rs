@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::Context;
 use cmdopts::CmdOpts;
 
@@ -24,6 +22,7 @@ fn main() -> surf::Result<()> {
     let dash_root = Tree::default();
     let dash_options = line::Options {
         keep_running_if_progress_is_empty: true,
+        throughput: true,
         ..Default::default()
     }
     .auto_configure(StreamKind::Stdout);
@@ -102,6 +101,7 @@ fn main() -> surf::Result<()> {
                 [0],
             name: "".into(),
             tree: dash_root.clone(),
+            threads: opts.threads.unwrap_or_else(num_cpus::get_physical),
         }));
 
         smol::future::pending().await

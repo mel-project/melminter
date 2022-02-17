@@ -2,13 +2,13 @@ use std::{
     future::Future,
     net::SocketAddr,
     sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 use crate::state::MintState;
 use dashmap::DashMap;
 use melwallet_client::WalletClient;
-use prodash::{messages::MessageLevel, unit::display::Mode, Progress, Root, Unit};
+use prodash::{messages::MessageLevel, unit::display::Mode};
 use smol::channel::{Receiver, Sender};
 use themelio_nodeprot::ValClient;
 use themelio_stf::melpow;
@@ -21,6 +21,7 @@ pub struct WorkerConfig {
     pub connect: SocketAddr,
     pub name: String,
     pub tree: prodash::Tree,
+    pub threads: usize,
 }
 
 /// Represents a worker.
@@ -89,35 +90,40 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
             worker.lock().unwrap().message(
                 MessageLevel::Info,
                 format!(
-                    "** [{}] Selected difficulty: {} (approx. {:?} / tx)",
-                    opts.name, my_difficulty, approx_iter
+                    "Selected difficulty: {} (approx. {:?} / tx)",
+                    my_difficulty, approx_iter
                 ),
             );
             // repeat because wallet could be out of money
-
+            let threads = opts.threads;
             let batch: Vec<(CoinID, CoinDataHeight, Vec<u8>)> = repeat_fallible(|| {
                 let mint_state = &mint_state;
                 let subworkers = DashMap::new();
                 let worker = worker.clone();
                 async move {
-                    let start = Instant::now();
                     let total = 1usize << (my_difficulty.saturating_sub(10));
                     let res = mint_state
-                        .mint_batch(my_difficulty, move |a, b| {
-                            let mut subworker = subworkers.entry(a).or_insert_with(|| {
-                                let mut child =
-                                    worker.lock().unwrap().add_child(format!("subworker {}", a));
-                                child.init(
-                                    Some(total),
-                                    Some(prodash::unit::dynamic_and_mode(
-                                        "kH",
-                                        Mode::with_throughput(),
-                                    )),
-                                );
-                                child
-                            });
-                            subworker.set(((total as f64) * b) as usize);
-                        })
+                        .mint_batch(
+                            my_difficulty,
+                            move |a, b| {
+                                let mut subworker = subworkers.entry(a).or_insert_with(|| {
+                                    let mut child = worker
+                                        .lock()
+                                        .unwrap()
+                                        .add_child(format!("subworker {}", a));
+                                    child.init(
+                                        Some(total),
+                                        Some(prodash::unit::dynamic_and_mode(
+                                            "kH",
+                                            Mode::with_throughput(),
+                                        )),
+                                    );
+                                    child
+                                });
+                                subworker.set(((total as f64) * b) as usize);
+                            },
+                            threads,
+                        )
                         .await?;
                     Ok::<_, surf::Error>(res)
                 }

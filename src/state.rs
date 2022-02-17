@@ -6,9 +6,7 @@ use serde::{Deserialize, Serialize};
 use stdcode::StdcodeSerializeExt;
 use themelio_nodeprot::ValClient;
 use themelio_stf::{melpow, PoolKey};
-use themelio_structs::{
-     CoinData, CoinDataHeight, CoinID, CoinValue, Denom, Transaction, TxKind,
-};
+use themelio_structs::{CoinData, CoinDataHeight, CoinID, CoinValue, Denom, Transaction, TxKind};
 
 #[derive(Clone)]
 pub struct MintState {
@@ -101,11 +99,12 @@ impl MintState {
         &self,
         difficulty: usize,
         on_progress: impl Fn(usize, f64) + Sync + Send + 'static,
+        threads: usize,
     ) -> surf::Result<Vec<(CoinID, CoinDataHeight, Vec<u8>)>> {
         let seeds = self.get_seeds().await?;
         let on_progress = Arc::new(on_progress);
         let mut proofs = Vec::new();
-        for (idx, seed) in seeds.iter().copied().take(num_cpus::get()).enumerate() {
+        for (idx, seed) in seeds.iter().copied().take(threads).enumerate() {
             let tip_cdh = self
                 .client
                 .snapshot()

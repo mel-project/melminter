@@ -16,4 +16,8 @@ pub struct CmdOpts {
     #[structopt(long)]
     /// Which wallet to "draw" from when the melminter runs out of fee-paying mels.
     pub backup_wallet: String,
+
+    #[structopt(long)]
+    /// Force a certain number of threads. Defaults to the number of *physical* CPUs.
+    pub threads: Option<usize>,
 }
