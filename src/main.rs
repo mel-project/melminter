@@ -1,7 +1,13 @@
+use std::time::Duration;
+
 use anyhow::Context;
 use cmdopts::CmdOpts;
 
 use melwallet_client::DaemonClient;
+use prodash::{
+    render::line::{self, StreamKind},
+    Tree, Unit,
+};
 use structopt::StructOpt;
 use themelio_structs::{CoinData, CoinID, CoinValue, Denom, TxKind};
 
@@ -12,28 +18,37 @@ mod worker;
 use crate::worker::{Worker, WorkerConfig};
 
 fn main() -> surf::Result<()> {
-    let log_conf = std::env::var("RUST_LOG").unwrap_or_else(|_| "melminter=debug,warn".into());
-    std::env::set_var("RUST_LOG", log_conf);
+    // let log_conf = std::env::var("RUST_LOG").unwrap_or_else(|_| "melminter=debug,warn".into());
+    // std::env::set_var("RUST_LOG", log_conf);
+
+    let dash_root = Tree::default();
+    let dash_options = line::Options {
+        keep_running_if_progress_is_empty: true,
+        ..Default::default()
+    }
+    .auto_configure(StreamKind::Stdout);
+    let handle = line::render(std::io::stdout(), dash_root.clone(), dash_options);
     let opts: CmdOpts = CmdOpts::from_args();
-    tracing_subscriber::fmt::init();
+    // tracing_subscriber::fmt::init();
     smolscale::block_on(async move {
         let daemon = DaemonClient::new(opts.daemon);
         let backup_wallet = daemon
             .get_wallet(&opts.backup_wallet)
             .await?
             .context("backup wallet does not exist")?;
+        let network_id = backup_wallet.summary().await?.network;
         // workers
         let mut workers = vec![];
-        let worker_id = 1;
-        log::info!("starting worker {}", worker_id);
-        let wallet_name = format!("{}{}", opts.wallet_prefix, worker_id);
+        let wallet_name = format!("{}{:?}", opts.wallet_prefix, network_id);
         // make sure the worker has enough money
         let worker_wallet = match daemon.get_wallet(&wallet_name).await? {
             Some(wallet) => wallet,
             None => {
-                log::info!("creating new wallet for worker {}", worker_id);
+                let mut evt = dash_root.add_child(format!("creating new wallet {}", wallet_name));
+                evt.init(None, None);
+                log::info!("creating new wallet");
                 daemon
-                    .create_wallet(&wallet_name, opts.testnet, None)
+                    .create_wallet(dbg!(&wallet_name), opts.testnet, None)
                     .await?;
                 daemon
                     .get_wallet(&wallet_name)
@@ -52,12 +67,10 @@ fn main() -> surf::Result<()> {
             .get("6d")
             .copied()
             .unwrap_or(CoinValue(0))
-            < CoinValue::from_millions(1u64) / 10
+            < CoinValue::from_millions(1u64) / 4
         {
-            log::warn!(
-                "worker {} does not have enough money, transferring money from the backup wallet!",
-                worker_id
-            );
+            let mut evt = dash_root.add_child("moving money from the backup wallet");
+            evt.init(None, Some(Unit::from("")));
             let tx = backup_wallet
                 .prepare_transaction(
                     TxKind::Normal,
@@ -82,7 +95,8 @@ fn main() -> surf::Result<()> {
         workers.push(Worker::start(WorkerConfig {
             wallet: worker_wallet,
             connect: opts.connect,
-            name: format!("worker-{}", worker_id),
+            name: "".into(),
+            tree: dash_root.clone(),
         }));
 
         smol::future::pending().await

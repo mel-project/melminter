@@ -28,3 +28,6 @@ num_cpus= "1.13.1"
 themelio-structs = "0.2.0"
 themelio-bootstrap = "0.5.1"
 fastrand="1"
+prodash = {version="18.0.0", features=["render-line", "render-line-crossterm"]}
+flume = "0.10.8"
+dashmap="4"

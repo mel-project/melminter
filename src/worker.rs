@@ -1,20 +1,18 @@
 use std::{
     future::Future,
     net::SocketAddr,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime},
 };
 
 use crate::state::MintState;
+use dashmap::DashMap;
 use melwallet_client::WalletClient;
-use smol::{
-    channel::{Receiver, Sender},
-    prelude::*,
-};
+use prodash::{messages::MessageLevel, Root, Unit};
+use smol::channel::{Receiver, Sender};
 use themelio_nodeprot::ValClient;
 use themelio_stf::melpow;
-use themelio_structs::{
-    BlockHeight, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, Transaction,
-};
+use themelio_structs::{CoinDataHeight, CoinID, CoinValue, NetID};
 
 /// Worker configuration
 #[derive(Clone, Debug)]
@@ -22,6 +20,7 @@ pub struct WorkerConfig {
     pub wallet: WalletClient,
     pub connect: SocketAddr,
     pub name: String,
+    pub tree: prodash::Tree,
 }
 
 /// Represents a worker.
@@ -48,12 +47,13 @@ impl Worker {
 }
 
 async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result<()> {
+    let mut tree = opts.tree.clone();
     repeat_fallible(|| async {
-        let mut my_speed = compute_speed().await;
+        let mut worker = tree.add_child("worker");
+        let worker = Arc::new(Mutex::new(worker));
+        let my_speed = compute_speed().await;
         let is_testnet = opts.wallet.summary().await?.network == NetID::Testnet;
         let client = get_valclient(is_testnet, opts.connect).await?;
-        let snap = client.snapshot().await?;
-        let max_speed = snap.current_header().dosc_speed as f64 / 30.0;
 
         let mint_state = MintState::new(opts.wallet.clone(), client.clone());
 
@@ -73,50 +73,54 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 .copied()
                 .unwrap_or_default();
             if our_doscs > CoinValue(0) {
-                log::info!("** [{}] CONVERTING {} ERG!", opts.name, our_doscs);
+                worker
+                    .lock()
+                    .unwrap()
+                    .message(MessageLevel::Info, format!("CONVERTING {} ERG!", our_doscs));
                 mint_state.convert_doscs(our_doscs).await?;
             }
 
-            log::info!("** [{}] My speed: {:.3} kH/s", opts.name, my_speed / 1000.0);
-            log::info!(
-                "** [{}]  Max speed: {:.3} kH/s",
-                opts.name,
-                max_speed / 1000.0
-            );
-
-            log::info!(
-                "** [{}] Estimated daily return: {:.2} DOSC",
-                opts.name,
-                my_speed * max_speed / max_speed.powi(2),
+            worker.lock().unwrap().message(
+                MessageLevel::Info,
+                format!("My speed: {:.3} kH/s", my_speed / 1000.0),
             );
             let my_difficulty = (my_speed * 3600.0).log2().ceil() as usize;
             let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
-            log::info!(
-                "** [{}] Selected difficulty: {} (approx. {:?} / tx)",
-                opts.name,
-                my_difficulty,
-                approx_iter
+            worker.lock().unwrap().message(
+                MessageLevel::Info,
+                format!(
+                    "** [{}] Selected difficulty: {} (approx. {:?} / tx)",
+                    opts.name, my_difficulty, approx_iter
+                ),
             );
             // repeat because wallet could be out of money
-            let start = Instant::now();
-            let batch: Vec<(CoinID, CoinDataHeight, Vec<u8>)> = repeat_fallible(|| async {
-                let deadline = SystemTime::now()
-                    + Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
-                mint_state
-                    .mint_batch(my_difficulty)
-                    .or(async move {
-                        loop {
-                            let now = SystemTime::now();
-                            if let Ok(dur) = deadline.duration_since(now) {
-                                log::debug!("approx {:?} left in iteration", dur);
-                            }
-                            smol::Timer::after(Duration::from_secs(60)).await;
-                        }
-                    })
-                    .await
+
+            let batch: Vec<(CoinID, CoinDataHeight, Vec<u8>)> = repeat_fallible(|| {
+                let mint_state = &mint_state;
+                let subworkers = DashMap::new();
+                let worker = worker.clone();
+                async move {
+                    let res = mint_state
+                        .mint_batch(my_difficulty, move |a, b| {
+                            let mut subworker = subworkers.entry(a).or_insert_with(|| {
+                                let mut child =
+                                    worker.lock().unwrap().add_child(format!("subworker {}", a));
+                                child.init(Some(1 << my_difficulty), Some(Unit::from("hashes")));
+                                child
+                            });
+                            subworker.set(((1 << my_difficulty) as f64 * b) as usize);
+                        })
+                        .await?;
+                    Ok::<_, surf::Error>(res)
+                }
             })
             .await;
-            log::info!("built batch of {} proofs!", batch.len());
+            worker.lock().unwrap().message(
+                MessageLevel::Info,
+                format!("built batch of {} future proofs", batch.len()),
+            );
+            let mut sub = worker.lock().unwrap().add_child("submitting proofs");
+            sub.init(Some(batch.len()), None);
             for (coin, data, proof) in batch {
                 let proof = &proof;
                 repeat_fallible(|| async {
@@ -133,10 +137,14 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     mint_state
                         .send_mint_transaction(coin, proof.clone(), reward_ergs.into())
                         .await?;
-                    log::info!("MINTED {} ERG", reward_ergs);
+                    worker
+                        .lock()
+                        .unwrap()
+                        .message(MessageLevel::Info, format!("minted {} ERG", reward_ergs));
                     Ok::<_, surf::Error>(())
                 })
                 .await;
+                sub.inc();
             }
             // let snap = repeat_fallible(|| client.snapshot()).await;
             // let reward_speed = 2u128.pow(my_difficulty as u32)

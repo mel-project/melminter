@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Context;
 use melwallet_client::WalletClient;
 use serde::{Deserialize, Serialize};
@@ -98,8 +100,10 @@ impl MintState {
     pub async fn mint_batch(
         &self,
         difficulty: usize,
+        on_progress: impl Fn(usize, f64) + Sync + Send + 'static,
     ) -> surf::Result<Vec<(CoinID, CoinDataHeight, Vec<u8>)>> {
         let seeds = self.get_seeds().await?;
+        let on_progress = Arc::new(on_progress);
         let mut proofs = Vec::new();
         for (idx, seed) in seeds
             .iter()
@@ -123,12 +127,13 @@ impl MintState {
                 .current_header()
                 .hash();
             let chi = tmelcrypt::hash_keyed(&tip_header_hash, &seed.stdcode());
+            let on_progress = on_progress.clone();
             let proof_fut = smolscale::spawn(async move {
                 (
                     tip_cdh,
                     melpow::Proof::generate_with_progress(&chi, difficulty, |progress| {
-                        if fastrand::f64() < 0.00001 {
-                            log::info!("thread {} at {:.3}%", idx, progress * 100.0);
+                        if fastrand::f64() < 0.001 {
+                            on_progress(idx, progress)
                         }
                     }),
                 )
