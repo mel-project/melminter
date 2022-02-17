@@ -8,7 +8,7 @@ use std::{
 use crate::state::MintState;
 use dashmap::DashMap;
 use melwallet_client::WalletClient;
-use prodash::{messages::MessageLevel, Root, Unit};
+use prodash::{messages::MessageLevel, Progress, Root, Unit};
 use smol::channel::{Receiver, Sender};
 use themelio_nodeprot::ValClient;
 use themelio_stf::melpow;
@@ -100,6 +100,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 let subworkers = DashMap::new();
                 let worker = worker.clone();
                 async move {
+                    let start = Instant::now();
                     let res = mint_state
                         .mint_batch(my_difficulty, move |a, b| {
                             let mut subworker = subworkers.entry(a).or_insert_with(|| {
@@ -108,7 +109,8 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                                 child.init(Some(1 << my_difficulty), Some(Unit::from("hashes")));
                                 child
                             });
-                            subworker.set(dbg!((1 << my_difficulty) as f64 * b) as usize);
+                            subworker.show_throughput(start);
+                            subworker.set(((1 << my_difficulty) as f64 * b) as usize);
                         })
                         .await?;
                     Ok::<_, surf::Error>(res)
