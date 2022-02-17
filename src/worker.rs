@@ -48,9 +48,9 @@ impl Worker {
 }
 
 async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result<()> {
-    let mut tree = opts.tree.clone();
+    let tree = opts.tree.clone();
     repeat_fallible(|| async {
-        let mut worker = tree.add_child("worker");
+        let worker = tree.add_child("worker");
         let worker = Arc::new(Mutex::new(worker));
         let my_speed = compute_speed().await;
         let is_testnet = opts.wallet.summary().await?.network == NetID::Testnet;
