@@ -101,16 +101,17 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 let worker = worker.clone();
                 async move {
                     let start = Instant::now();
+                    let total = 1usize << (my_difficulty.saturating_sub(10));
                     let res = mint_state
                         .mint_batch(my_difficulty, move |a, b| {
                             let mut subworker = subworkers.entry(a).or_insert_with(|| {
                                 let mut child =
                                     worker.lock().unwrap().add_child(format!("subworker {}", a));
-                                child.init(Some(1 << my_difficulty), Some(Unit::from("hashes")));
+                                child.init(Some(total), Some(Unit::from("kH")));
                                 child
                             });
                             subworker.show_throughput(start);
-                            subworker.set((dbg!((1 << my_difficulty) as f64) * b) as usize);
+                            subworker.set(((total as f64) * b) as usize);
                         })
                         .await?;
                     Ok::<_, surf::Error>(res)
