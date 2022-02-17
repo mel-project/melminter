@@ -149,7 +149,12 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     let reward_ergs =
                         themelio_stf::dosc_to_erg(snap.current_header().height, reward);
                     mint_state
-                        .send_mint_transaction(coin, proof.clone(), reward_ergs.into())
+                        .send_mint_transaction(
+                            coin,
+                            my_difficulty,
+                            proof.clone(),
+                            reward_ergs.into(),
+                        )
                         .await?;
                     worker
                         .lock()

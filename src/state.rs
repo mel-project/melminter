@@ -146,6 +146,7 @@ impl MintState {
     pub async fn send_mint_transaction(
         &self,
         seed: CoinID,
+        difficulty: usize,
         proof: Vec<u8>,
         ergs: CoinValue,
     ) -> surf::Result<()> {
@@ -162,7 +163,7 @@ impl MintState {
                     covhash: own_cov,
                 }],
                 vec![],
-                proof,
+                (difficulty, proof).stdcode(),
                 vec![Denom::Erg],
             )
             .await?;
