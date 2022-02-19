@@ -85,7 +85,9 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 MessageLevel::Info,
                 format!("My speed: {:.3} kH/s", my_speed / 1000.0),
             );
-            let my_difficulty = (my_speed * 3600.0).log2().ceil() as usize;
+            let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 3600.0 })
+                .log2()
+                .ceil() as usize;
             let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
             worker.lock().unwrap().message(
                 MessageLevel::Info,
@@ -137,6 +139,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
             sub.init(Some(batch.len()), None);
             for (coin, data, proof) in batch {
                 let proof = &proof;
+                let data = &data;
                 repeat_fallible(|| async {
                     let snap = client.snapshot().await?;
                     let reward_speed = 2u128.pow(my_difficulty as u32)
@@ -151,15 +154,16 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     mint_state
                         .send_mint_transaction(
                             coin,
+                            data.coin_data.clone(),
                             my_difficulty,
                             proof.clone(),
                             reward_ergs.into(),
                         )
                         .await?;
-                    worker
-                        .lock()
-                        .unwrap()
-                        .message(MessageLevel::Info, format!("minted {} ERG", reward_ergs));
+                    worker.lock().unwrap().message(
+                        MessageLevel::Info,
+                        format!("minted {} ERG", CoinValue(reward_ergs)),
+                    );
                     Ok::<_, surf::Error>(())
                 })
                 .await;

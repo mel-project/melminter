@@ -146,6 +146,7 @@ impl MintState {
     pub async fn send_mint_transaction(
         &self,
         seed: CoinID,
+        seed_data: CoinData,
         difficulty: usize,
         proof: Vec<u8>,
         ergs: CoinValue,
@@ -156,12 +157,15 @@ impl MintState {
             .prepare_transaction(
                 TxKind::DoscMint,
                 vec![seed],
-                vec![CoinData {
-                    denom: Denom::Erg,
-                    value: ergs,
-                    additional_data: vec![],
-                    covhash: own_cov,
-                }],
+                vec![
+                    CoinData {
+                        denom: Denom::Erg,
+                        value: ergs,
+                        additional_data: vec![],
+                        covhash: own_cov,
+                    },
+                    seed_data,
+                ],
                 vec![],
                 (difficulty, proof).stdcode(),
                 vec![Denom::Erg],
