@@ -135,62 +135,51 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 MessageLevel::Info,
                 format!("built batch of {} future proofs", batch.len()),
             );
-            let mut sub = worker.lock().unwrap().add_child("submitting proofs");
-            sub.init(Some(batch.len()), None);
+            let mut tasks = vec![];
+            let worker = &worker;
+            let mint_state = &mint_state;
+            let client = &client;
+            let exec = smol::Executor::new();
             for (coin, data, proof) in batch {
-                let proof = &proof;
-                let data = &data;
-                repeat_fallible(|| async {
-                    let snap = client.snapshot().await?;
-                    let reward_speed = 2u128.pow(my_difficulty as u32)
-                        / (snap.current_header().height.0 + 5 - data.height.0) as u128;
-                    let reward = themelio_stf::calculate_reward(
-                        reward_speed,
-                        snap.current_header().dosc_speed,
-                        my_difficulty as u32,
-                    );
-                    let reward_ergs =
-                        themelio_stf::dosc_to_erg(snap.current_header().height, reward);
-                    mint_state
-                        .send_mint_transaction(
-                            coin,
-                            data.coin_data.clone(),
-                            my_difficulty,
-                            proof.clone(),
-                            reward_ergs.into(),
-                        )
-                        .await?;
-                    worker.lock().unwrap().message(
-                        MessageLevel::Info,
-                        format!("minted {} ERG", CoinValue(reward_ergs)),
-                    );
-                    Ok::<_, surf::Error>(())
-                })
-                .await;
-                sub.inc();
+                tasks.push(exec.spawn(repeat_fallible(move || {
+                    let data = data.clone();
+                    let proof = proof.clone();
+                    async move {
+                        let mut sub = worker.lock().unwrap().add_child("submitting proof");
+                        sub.init(None, None);
+                        let snap = client.snapshot().await?;
+                        let reward_speed = 2u128.pow(my_difficulty as u32)
+                            / (snap.current_header().height.0 + 5 - data.height.0) as u128;
+                        let reward = themelio_stf::calculate_reward(
+                            reward_speed,
+                            snap.current_header().dosc_speed,
+                            my_difficulty as u32,
+                        );
+                        let reward_ergs =
+                            themelio_stf::dosc_to_erg(snap.current_header().height, reward);
+                        mint_state
+                            .send_mint_transaction(
+                                coin,
+                                data.coin_data.clone(),
+                                my_difficulty,
+                                proof.clone(),
+                                reward_ergs.into(),
+                            )
+                            .await?;
+                        sub.message(
+                            MessageLevel::Info,
+                            format!("minted {} ERG", CoinValue(reward_ergs)),
+                        );
+                        Ok::<_, surf::Error>(())
+                    }
+                })));
             }
-            // let snap = repeat_fallible(|| client.snapshot()).await;
-            // let reward_speed = 2u128.pow(my_difficulty as u32)
-            //     / (snap.current_header().height.0 + 5 - earlier_height.0) as u128;
-            // let reward = themelio_stf::calculate_reward(
-            //     reward_speed,
-            //     snap.current_header().dosc_speed,
-            //     my_difficulty as u32,
-            // );
-            // let reward_nom = themelio_stf::dosc_to_erg(snap.current_header().height, reward);
-            // tx.outputs.push(CoinData {
-            //     denom: Denom::Erg,
-            //     value: reward_nom.into(),
-            //     additional_data: vec![],
-            //     covhash: opts.wallet.summary().await?.address,
-            // });
-            // my_speed = 2.0f64.powi(my_difficulty as _) / start.elapsed().as_secs_f64();
-            // log::info!(
-            //     "** [{}] SUCCEEDED in minting a transaction producing {} ERG",
-            //     opts.name,
-            //     reward_nom,
-            // );
-            // mint_state.send_resigned_transaction(tx).await?;
+            exec.run(async {
+                for task in tasks {
+                    task.await;
+                }
+            })
+            .await;
         }
     })
     .await;
