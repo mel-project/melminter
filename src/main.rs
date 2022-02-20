@@ -23,10 +23,12 @@ fn main() -> surf::Result<()> {
     let dash_options = line::Options {
         keep_running_if_progress_is_empty: true,
         throughput: true,
+        // hide_cursor: true,
         ..Default::default()
     }
     .auto_configure(StreamKind::Stdout);
     let handle = line::render(std::io::stdout(), dash_root.clone(), dash_options);
+
     let opts: CmdOpts = CmdOpts::from_args();
     // tracing_subscriber::fmt::init();
     smolscale::block_on(async move {

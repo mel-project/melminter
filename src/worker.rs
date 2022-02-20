@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     future::Future,
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -6,13 +7,16 @@ use std::{
 };
 
 use crate::state::MintState;
-use dashmap::DashMap;
+use dashmap::{mapref::multiple::RefMulti, DashMap};
 use melwallet_client::WalletClient;
-use prodash::{messages::MessageLevel, unit::display::Mode};
-use smol::channel::{Receiver, Sender};
+use prodash::{messages::MessageLevel, tree::Item, unit::display::Mode};
+use smol::{
+    channel::{Receiver, Sender},
+    Task,
+};
 use themelio_nodeprot::ValClient;
-use themelio_stf::melpow;
-use themelio_structs::{CoinDataHeight, CoinID, CoinValue, NetID};
+use themelio_stf::{melpow, PoolKey};
+use themelio_structs::{CoinDataHeight, CoinID, CoinValue, Denom, NetID};
 
 /// Worker configuration
 #[derive(Clone, Debug)]
@@ -55,6 +59,11 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
         let my_speed = compute_speed().await;
         let is_testnet = opts.wallet.summary().await?.network == NetID::Testnet;
         let client = get_valclient(is_testnet, opts.connect).await?;
+        let snapshot = client.snapshot().await?;
+        let erg_to_mel = snapshot
+            .get_pool(PoolKey::mel_and(Denom::Erg))
+            .await?
+            .expect("must have erg-mel pool");
 
         let mint_state = MintState::new(opts.wallet.clone(), client.clone());
 
@@ -98,10 +107,54 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
             );
             // repeat because wallet could be out of money
             let threads = opts.threads;
+            let fastest_speed = client.snapshot().await?.current_header().dosc_speed as f64 / 30.0;
             let batch: Vec<(CoinID, CoinDataHeight, Vec<u8>)> = repeat_fallible(|| {
                 let mint_state = &mint_state;
-                let subworkers = DashMap::new();
+                let subworkers = Arc::new(DashMap::new());
                 let worker = worker.clone();
+
+                // background task that talllies speeds
+                let speed_task: Arc<Task<()>> = {
+                    let subworkers = subworkers.clone();
+                    let worker = worker.clone();
+                    let snapshot = snapshot.clone();
+                    Arc::new(smolscale::spawn(async move {
+                        let mut previous: HashMap<usize, usize> = HashMap::new();
+                        let mut _space = None;
+                        let mut delta_sum = 0;
+                        let start = Instant::now();
+                        loop {
+                            smol::Timer::after(Duration::from_secs(1)).await;
+                            subworkers.iter().for_each(|pp: RefMulti<usize, Item>| {
+                                let prev = previous.entry(*pp.key()).or_insert(0usize);
+                                let curr = pp.value().step().unwrap_or_default();
+                                delta_sum += curr.saturating_sub(*prev);
+                                *prev = curr;
+                            });
+                            let speed = (delta_sum * 1024) as f64 / start.elapsed().as_secs_f64();
+                            let per_core_speed = speed / (threads as f64);
+                            let dosc_per_day =
+                                (per_core_speed / fastest_speed).powi(2) * (threads as f64);
+                            let erg_per_day = dosc_per_day
+                                * (themelio_stf::dosc_to_erg(
+                                    snapshot.current_header().height,
+                                    10000,
+                                ) as f64)
+                                / 10000.0;
+                            let (_, mel_per_day) = erg_to_mel
+                                .clone()
+                                .swap_many((erg_per_day * 10000.0) as u128, 0);
+                            let mel_per_day = mel_per_day as f64 / 10000.0;
+                            let mut new = worker.lock().unwrap().add_child(format!(
+                                "daily return: {:.3} DOSC ≈ {:.3} ERG ≈ {:.3} MEL ",
+                                dosc_per_day, erg_per_day, mel_per_day
+                            ));
+                            new.init(None, None);
+                            _space = Some(new)
+                        }
+                    }))
+                };
+
                 async move {
                     let total = 1usize << (my_difficulty.saturating_sub(10));
                     let res = mint_state
@@ -127,6 +180,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                             threads,
                         )
                         .await?;
+                    drop(speed_task);
                     Ok::<_, surf::Error>(res)
                 }
             })
@@ -135,51 +189,38 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 MessageLevel::Info,
                 format!("built batch of {} future proofs", batch.len()),
             );
-            let mut tasks = vec![];
-            let worker = &worker;
-            let mint_state = &mint_state;
-            let client = &client;
-            let exec = smol::Executor::new();
+            let mut sub = worker.lock().unwrap().add_child("submitting proof");
+            sub.init(Some(batch.len()), None);
             for (coin, data, proof) in batch {
-                tasks.push(exec.spawn(repeat_fallible(move || {
-                    let data = data.clone();
-                    let proof = proof.clone();
-                    async move {
-                        let mut sub = worker.lock().unwrap().add_child("submitting proof");
-                        sub.init(None, None);
-                        let snap = client.snapshot().await?;
-                        let reward_speed = 2u128.pow(my_difficulty as u32)
-                            / (snap.current_header().height.0 + 5 - data.height.0) as u128;
-                        let reward = themelio_stf::calculate_reward(
-                            reward_speed,
-                            snap.current_header().dosc_speed,
-                            my_difficulty as u32,
-                        );
-                        let reward_ergs =
-                            themelio_stf::dosc_to_erg(snap.current_header().height, reward);
-                        mint_state
-                            .send_mint_transaction(
-                                coin,
-                                data.coin_data.clone(),
-                                my_difficulty,
-                                proof.clone(),
-                                reward_ergs.into(),
-                            )
-                            .await?;
-                        sub.message(
-                            MessageLevel::Info,
-                            format!("minted {} ERG", CoinValue(reward_ergs)),
-                        );
-                        Ok::<_, surf::Error>(())
-                    }
-                })));
+                sub.inc();
+                let sub = Mutex::new(&mut sub);
+                repeat_fallible(|| async {
+                    let snap = client.snapshot().await?;
+                    let reward_speed = 2u128.pow(my_difficulty as u32)
+                        / (snap.current_header().height.0 + 5 - data.height.0) as u128;
+                    let reward = themelio_stf::calculate_reward(
+                        reward_speed,
+                        snap.current_header().dosc_speed,
+                        my_difficulty as u32,
+                    );
+                    let reward_ergs =
+                        themelio_stf::dosc_to_erg(snap.current_header().height, reward);
+                    mint_state
+                        .send_mint_transaction(
+                            coin,
+                            data.coin_data.clone(),
+                            my_difficulty,
+                            proof.clone(),
+                            reward_ergs.into(),
+                        )
+                        .await?;
+                    sub.lock()
+                        .unwrap()
+                        .info(format!("minted {} ERG", CoinValue(reward_ergs)));
+                    Ok::<_, surf::Error>(())
+                })
+                .await
             }
-            exec.run(async {
-                for task in tasks {
-                    task.await;
-                }
-            })
-            .await;
         }
     })
     .await;
@@ -193,7 +234,7 @@ async fn repeat_fallible<T, E: std::fmt::Debug, F: Future<Output = Result<T, E>>
     loop {
         match clos().await {
             Ok(val) => return val,
-            Err(err) => log::debug!("retrying failed: {:?}", err),
+            Err(err) => log::warn!("retrying failed: {:?}", err),
         }
         smol::Timer::after(Duration::from_secs(1)).await;
     }
@@ -206,7 +247,7 @@ async fn compute_speed() -> f64 {
         smol::unblock(move || melpow::Proof::generate(&[], difficulty)).await;
         let elapsed = start.elapsed();
         let speed = 2.0f64.powi(difficulty as _) / elapsed.as_secs_f64();
-        if elapsed.as_secs_f64() > 2.0 {
+        if elapsed.as_secs_f64() > 0.5 {
             return speed;
         }
     }
