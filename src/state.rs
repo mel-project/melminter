@@ -131,7 +131,10 @@ impl MintState {
                 .hash();
             let chi = tmelcrypt::hash_keyed(&tip_header_hash, &seed.stdcode());
             let on_progress = on_progress.clone();
-            let proof_fut = smolscale::spawn(async move {
+            let core_ids = core_affinity::get_core_ids().unwrap();
+            let core_id = core_ids[idx % core_ids.len()];
+            let proof_fut = std::thread::spawn(move || {
+                core_affinity::set_for_current(core_id);
                 (
                     tip_cdh,
                     melpow::Proof::generate_with_progress(&chi, difficulty, |progress| {
@@ -145,7 +148,7 @@ impl MintState {
         }
         let mut out = vec![];
         for (seed, proof) in seeds.into_iter().zip(proofs.into_iter()) {
-            let result = proof.await;
+            let result = smol::unblock(move || proof.join().unwrap()).await;
             out.push((seed, result.0, result.1.to_bytes()))
         }
         Ok(out)

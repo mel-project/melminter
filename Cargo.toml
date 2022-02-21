@@ -34,3 +34,4 @@ themelio-bootstrap = "0.5.1"
 fastrand="1"
 prodash = {version="18.0.0", features=["render-tui", "render-tui-crossterm", "unit-human", "render-line", "render-line-crossterm"]}
 dashmap="4"
+core_affinity = "0.5.10"
