@@ -99,6 +99,7 @@ fn main() -> surf::Result<()> {
 
         workers.push(Worker::start(WorkerConfig {
             wallet: worker_wallet,
+            backup: backup_wallet.clone(),
             connect: themelio_bootstrap::bootstrap_routes(backup_wallet.summary().await?.network)
                 [0],
             name: "".into(),

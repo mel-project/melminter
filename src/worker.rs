@@ -16,12 +16,13 @@ use smol::{
 };
 use themelio_nodeprot::ValClient;
 use themelio_stf::{melpow, PoolKey};
-use themelio_structs::{CoinDataHeight, CoinID, CoinValue, Denom, NetID};
+use themelio_structs::{CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, TxKind};
 
 /// Worker configuration
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
     pub wallet: WalletClient,
+    pub backup: WalletClient,
     pub connect: SocketAddr,
     pub name: String,
     pub tree: prodash::Tree,
@@ -60,7 +61,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
         let is_testnet = opts.wallet.summary().await?.network == NetID::Testnet;
         let client = get_valclient(is_testnet, opts.connect).await?;
 
-        let mint_state = MintState::new(opts.wallet.clone(), client.clone());
+        let mint_state = MintState::new(opts.wallet.clone(), opts.backup.clone(), client.clone());
 
         loop {
             // turn off gracefully
@@ -74,8 +75,8 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 .await?
                 .expect("must have erg-mel pool");
 
-            // If we any erg, convert it all to mel.
-            let our_doscs = opts
+            // If we have any erg, convert it all to mel.
+            let our_ergs = opts
                 .wallet
                 .summary()
                 .await?
@@ -83,12 +84,48 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 .get("64")
                 .copied()
                 .unwrap_or_default();
-            if our_doscs > CoinValue(0) {
+            if our_ergs > CoinValue(0) {
                 worker
                     .lock()
                     .unwrap()
-                    .message(MessageLevel::Info, format!("CONVERTING {} ERG!", our_doscs));
-                mint_state.convert_doscs(our_doscs).await?;
+                    .message(MessageLevel::Info, format!("CONVERTING {} ERG!", our_ergs));
+                mint_state.convert_doscs(our_ergs).await?;
+            }
+
+            // If we have more than 1 MEL, transfer 0.5 MEL to the backup wallet.
+            let our_mels = opts
+                .wallet
+                .summary()
+                .await?
+                .detailed_balance
+                .get("6d")
+                .copied()
+                .unwrap_or_default();
+            if our_mels > CoinValue::from_millions(1u8) {
+                let to_convert = our_mels / 2;
+                worker.lock().unwrap().info(format!(
+                    "transferring {} MEL of profits to backup wallet",
+                    our_mels
+                ));
+                let backup_wallet = opts.backup.summary().await?.address;
+                let to_send = opts
+                    .wallet
+                    .prepare_transaction(
+                        TxKind::Normal,
+                        vec![],
+                        vec![CoinData {
+                            covhash: backup_wallet,
+                            value: to_convert,
+                            additional_data: vec![],
+                            denom: Denom::Mel,
+                        }],
+                        vec![],
+                        vec![],
+                        vec![],
+                    )
+                    .await?;
+                let h = opts.wallet.send_tx(to_send).await?;
+                opts.wallet.wait_transaction(h).await?;
             }
 
             worker.lock().unwrap().message(

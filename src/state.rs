@@ -11,6 +11,7 @@ use themelio_structs::{CoinData, CoinDataHeight, CoinID, CoinValue, Denom, Trans
 #[derive(Clone)]
 pub struct MintState {
     wallet: WalletClient,
+    backup: WalletClient,
     client: ValClient,
 }
 
@@ -21,8 +22,12 @@ struct PrepareReq {
 }
 
 impl MintState {
-    pub fn new(wallet: WalletClient, client: ValClient) -> Self {
-        Self { wallet, client }
+    pub fn new(wallet: WalletClient, backup: WalletClient, client: ValClient) -> Self {
+        Self {
+            wallet,
+            backup,
+            client,
+        }
     }
 
     /// Gets a list of "seed" coins available. If none are available, generates some and blocks until they are available.
