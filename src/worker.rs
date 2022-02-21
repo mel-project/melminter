@@ -59,11 +59,6 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
         let my_speed = compute_speed().await;
         let is_testnet = opts.wallet.summary().await?.network == NetID::Testnet;
         let client = get_valclient(is_testnet, opts.connect).await?;
-        let snapshot = client.snapshot().await?;
-        let erg_to_mel = snapshot
-            .get_pool(PoolKey::mel_and(Denom::Erg))
-            .await?
-            .expect("must have erg-mel pool");
 
         let mint_state = MintState::new(opts.wallet.clone(), client.clone());
 
@@ -72,6 +67,12 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
             if recv_stop.try_recv().is_ok() {
                 return Ok::<_, surf::Error>(());
             }
+
+            let snapshot = client.snapshot().await?;
+            let erg_to_mel = snapshot
+                .get_pool(PoolKey::mel_and(Denom::Erg))
+                .await?
+                .expect("must have erg-mel pool");
 
             // If we any erg, convert it all to mel.
             let our_doscs = opts
@@ -92,7 +93,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
 
             worker.lock().unwrap().message(
                 MessageLevel::Info,
-                format!("My speed: {:.3} kH/s", my_speed / 1000.0),
+                format!("My estimated speed: {:.3} kH/s", my_speed / 1000.0),
             );
             let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 3600.0 })
                 .log2()
@@ -108,6 +109,10 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
             // repeat because wallet could be out of money
             let threads = opts.threads;
             let fastest_speed = client.snapshot().await?.current_header().dosc_speed as f64 / 30.0;
+            worker.lock().unwrap().info(format!(
+                "Max speed on chain: {:.2} kH/s",
+                fastest_speed / 1000.0
+            ));
             let batch: Vec<(CoinID, CoinDataHeight, Vec<u8>)> = repeat_fallible(|| {
                 let mint_state = &mint_state;
                 let subworkers = Arc::new(DashMap::new());
