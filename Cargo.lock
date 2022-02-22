@@ -1590,6 +1590,7 @@ dependencies = [
  "anyhow",
  "core_affinity",
  "dashmap 4.0.2",
+ "env_logger 0.9.0",
  "fastrand",
  "hex",
  "log",

@@ -30,7 +30,7 @@ fn main() -> surf::Result<()> {
     let handle = line::render(std::io::stdout(), dash_root.clone(), dash_options);
 
     let opts: CmdOpts = CmdOpts::from_args();
-    tracing_subscriber::fmt::init();
+    env_logger::init();
     smolscale::block_on(async move {
         let daemon = DaemonClient::new(opts.daemon);
         let backup_wallet = daemon
