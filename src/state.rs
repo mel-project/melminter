@@ -8,6 +8,8 @@ use themelio_nodeprot::ValClient;
 use themelio_stf::{melpow, PoolKey};
 use themelio_structs::{CoinData, CoinDataHeight, CoinID, CoinValue, Denom, Transaction, TxKind};
 
+use crate::repeat_fallible;
+
 #[derive(Clone)]
 pub struct MintState {
     wallet: WalletClient,
@@ -114,19 +116,15 @@ impl MintState {
         let on_progress = Arc::new(on_progress);
         let mut proofs = Vec::new();
         for (idx, seed) in seeds.iter().copied().take(threads).enumerate() {
-            let tip_cdh = self
-                .client
-                .snapshot()
-                .await?
-                .get_coin(seed)
-                .await?
-                .context("transaction's input spent from behind our back")?;
+            let tip_cdh =
+                repeat_fallible(|| async { self.client.snapshot().await?.get_coin(seed).await })
+                    .await
+                    .context("transaction's input spent from behind our back")?;
             // log::debug!("tip_cdh = {:#?}", tip_cdh);
             let snapshot = self.client.snapshot().await?;
             // log::debug!("snapshot height = {}", snapshot.current_header().height);
-            let tip_header_hash = snapshot
-                .get_older(tip_cdh.height)
-                .await?
+            let tip_header_hash = repeat_fallible(|| snapshot.get_older(tip_cdh.height))
+                .await
                 .current_header()
                 .hash();
             let chi = tmelcrypt::hash_keyed(&tip_header_hash, &seed.stdcode());

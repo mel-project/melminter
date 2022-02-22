@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::state::MintState;
+use crate::{repeat_fallible, state::MintState};
 use dashmap::{mapref::multiple::RefMulti, DashMap};
 use melwallet_client::WalletClient;
 use prodash::{messages::MessageLevel, tree::Item, unit::display::Mode};
@@ -267,19 +267,6 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
     })
     .await;
     Ok(())
-}
-
-// Repeats something until it stops failing
-async fn repeat_fallible<T, E: std::fmt::Debug, F: Future<Output = Result<T, E>>>(
-    mut clos: impl FnMut() -> F,
-) -> T {
-    loop {
-        match clos().await {
-            Ok(val) => return val,
-            Err(err) => log::warn!("retrying failed: {:?}", err),
-        }
-        smol::Timer::after(Duration::from_secs(1)).await;
-    }
 }
 
 // Computes difficulty

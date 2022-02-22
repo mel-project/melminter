@@ -1,3 +1,5 @@
+use std::{future::Future, time::Duration};
+
 use anyhow::Context;
 use cmdopts::CmdOpts;
 
@@ -109,4 +111,17 @@ fn main() -> surf::Result<()> {
 
         smol::future::pending().await
     })
+}
+
+// Repeats something until it stops failing
+async fn repeat_fallible<T, E: std::fmt::Debug, F: Future<Output = Result<T, E>>>(
+    mut clos: impl FnMut() -> F,
+) -> T {
+    loop {
+        match clos().await {
+            Ok(val) => return val,
+            Err(err) => log::warn!("retrying failed: {:?}", err),
+        }
+        smol::Timer::after(Duration::from_secs(1)).await;
+    }
 }
