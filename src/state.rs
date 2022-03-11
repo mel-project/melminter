@@ -68,7 +68,7 @@ impl MintState {
     async fn get_seeds_raw(&self) -> surf::Result<Vec<CoinID>> {
         let dumped = self.wallet.dump_wallet().await?.full;
         let mut unsorted = dumped
-            
+            .unspent_coins
             .iter()
             .filter_map(|(k, v)| {
                 if matches!(v.coin_data.denom, Denom::Custom(_)) {
