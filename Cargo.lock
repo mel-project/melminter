@@ -1571,7 +1571,7 @@ version = "0.3.6-alpha.0"
 dependencies = [
  "anyhow",
  "core_affinity",
- "dashmap 4.0.2",
+ "dashmap 5.1.0",
  "env_logger 0.9.0",
  "fastrand",
  "hex",
@@ -1623,9 +1623,9 @@ dependencies = [
 
 [[package]]
 name = "melwallet-client"
-version = "0.4.5"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a612881494119c80bad2563d562f2b711517457f9751dfb5c4284ada73562789"
+checksum = "d684f29b8a0af0d42e4c7dd630c60622b853f3b625f97a07f71228addf3fb9da"
 dependencies = [
  "anyhow",
  "async-h1",
