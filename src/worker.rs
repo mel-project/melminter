@@ -239,7 +239,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 repeat_fallible(|| async {
                     let snap = client.snapshot().await?;
                     let reward_speed = 2u128.pow(my_difficulty as u32)
-                        / (snap.current_header().height.0 + 5 - data.height.0) as u128;
+                        / (snap.current_header().height.0 + 10 - data.height.0) as u128;
                     let reward = themelio_stf::calculate_reward(
                         reward_speed,
                         snap.current_header().dosc_speed,
