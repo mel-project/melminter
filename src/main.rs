@@ -96,7 +96,6 @@ fn main() -> surf::Result<()> {
             let txhash = backup_wallet.send_tx(tx).await?;
             log::warn!("waiting for txhash {:?}...", txhash);
             backup_wallet.wait_transaction(txhash).await?;
-            worker_wallet.add_coin(CoinID { txhash, index: 0 }).await?;
         }
 
         workers.push(Worker::start(WorkerConfig {

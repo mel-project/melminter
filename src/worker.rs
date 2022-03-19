@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    future::Future,
     net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},

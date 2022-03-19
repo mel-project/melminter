@@ -1623,9 +1623,9 @@ dependencies = [
 
 [[package]]
 name = "melwallet-client"
-version = "0.5.2"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d684f29b8a0af0d42e4c7dd630c60622b853f3b625f97a07f71228addf3fb9da"
+checksum = "5296f45b3c4ab1d1ca19836f9c1c3cb09acb336e84e55aada41d783c6c1f294d"
 dependencies = [
  "anyhow",
  "async-h1",
