@@ -100,7 +100,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 .get("6d")
                 .copied()
                 .unwrap_or_default();
-            if our_mels > CoinValue::from_millions(1u8) {
+            if our_mels > CoinValue::from_millions(1u8) / 10 {
                 let to_convert = our_mels / 2;
                 worker.lock().unwrap().info(format!(
                     "transferring {} MEL of profits to backup wallet",

@@ -9,7 +9,7 @@ use prodash::{
     Tree, Unit,
 };
 use structopt::StructOpt;
-use themelio_structs::{CoinData, CoinID, CoinValue, Denom, NetID, TxKind};
+use themelio_structs::{CoinData, CoinValue, Denom, NetID, TxKind};
 
 mod cmdopts;
 mod state;
@@ -74,7 +74,7 @@ fn main() -> surf::Result<()> {
             .get("6d")
             .copied()
             .unwrap_or(CoinValue(0))
-            < CoinValue::from_millions(1u64) / 10
+            < CoinValue::from_millions(1u64) / 20
         {
             let mut evt = dash_root.add_child("moving money from the backup wallet");
             evt.init(None, Some(Unit::from("")));
