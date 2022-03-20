@@ -273,13 +273,9 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                             {
                                 Err(err) => {
                                     if err.to_string().contains("preparation") {
-                                        let spacing =
-                                            Duration::from_secs_f64(30.0 + fastrand::f64() * 30.0);
-                                        log::warn!(
-                                            "insufficient funds, so retrying after {:?}",
-                                            spacing
-                                        );
-                                        smol::Timer::after(spacing).await;
+                                        let mut sub = sub.add_child("waiting for available coins");
+                                        sub.init(None, None);
+                                        smol::Timer::after(Duration::from_secs(10)).await;
                                     } else {
                                         anyhow::bail!(err)
                                     }
