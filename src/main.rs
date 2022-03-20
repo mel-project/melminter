@@ -29,7 +29,7 @@ fn main() -> surf::Result<()> {
         ..Default::default()
     }
     .auto_configure(StreamKind::Stdout);
-    let handle = line::render(std::io::stdout(), dash_root.clone(), dash_options);
+    let _handle = line::render(std::io::stdout(), dash_root.clone(), dash_options);
 
     let opts: CmdOpts = CmdOpts::from_args();
     env_logger::init();

@@ -6,14 +6,13 @@ use serde::{Deserialize, Serialize};
 use stdcode::StdcodeSerializeExt;
 use themelio_nodeprot::ValClient;
 use themelio_stf::{melpow, PoolKey};
-use themelio_structs::{CoinData, CoinDataHeight, CoinID, CoinValue, Denom, Transaction, TxKind};
+use themelio_structs::{CoinData, CoinDataHeight, CoinID, CoinValue, Denom, TxHash, TxKind};
 
 use crate::repeat_fallible;
 
 #[derive(Clone)]
 pub struct MintState {
     wallet: WalletClient,
-    backup: WalletClient,
     client: ValClient,
 }
 
@@ -24,21 +23,17 @@ struct PrepareReq {
 }
 
 impl MintState {
-    pub fn new(wallet: WalletClient, backup: WalletClient, client: ValClient) -> Self {
-        Self {
-            wallet,
-            backup,
-            client,
-        }
+    pub fn new(wallet: WalletClient, client: ValClient) -> Self {
+        Self { wallet, client }
     }
 
-    /// Gets a list of "seed" coins available. If none are available, generates some and blocks until they are available.
-    async fn get_seeds(&self) -> surf::Result<Vec<CoinID>> {
+    /// Generates a list of "seed" coins.
+    pub async fn generate_seeds(&self, threads: usize) -> surf::Result<()> {
         let my_address = self.wallet.summary().await?.address;
         loop {
             let toret = self.get_seeds_raw().await?;
-            if !toret.is_empty() {
-                return Ok(toret);
+            if toret.len() >= threads {
+                return Ok(());
             }
             // generate a bunch of custom-token utxos
             let tx = self
@@ -52,7 +47,7 @@ impl MintState {
                         value: CoinValue(1),
                         additional_data: vec![],
                     })
-                    .take(64)
+                    .take(threads)
                     .collect(),
                     vec![],
                     vec![],
@@ -60,7 +55,6 @@ impl MintState {
                 )
                 .await?;
             let sent_hash = self.wallet.send_tx(tx).await?;
-            log::info!("no seed coins, creating a bunch with {:?}...", sent_hash);
             self.wallet.wait_transaction(sent_hash).await?;
         }
     }
@@ -81,27 +75,6 @@ impl MintState {
             .collect())
     }
 
-    async fn prepare_dummy(&self) -> surf::Result<Transaction> {
-        let my_address = self.wallet.summary().await?.address;
-        let res = self
-            .wallet
-            .prepare_transaction(
-                TxKind::DoscMint,
-                vec![],
-                vec![CoinData {
-                    covhash: my_address,
-                    denom: Denom::Mel,
-                    value: CoinValue(1),
-                    additional_data: vec![],
-                }],
-                vec![],
-                vec![0u8; 65536],
-                vec![],
-            )
-            .await?;
-        Ok(res)
-    }
-
     /// Creates a partially-filled-in transaction, with the given difficulty, that's neither signed nor feed. The caller should fill in the DOSC output.
     pub async fn mint_batch(
         &self,
@@ -109,7 +82,7 @@ impl MintState {
         on_progress: impl Fn(usize, f64) + Sync + Send + 'static,
         threads: usize,
     ) -> surf::Result<Vec<(CoinID, CoinDataHeight, Vec<u8>)>> {
-        let seeds = self.get_seeds().await?;
+        let seeds = self.get_seeds_raw().await?;
         let on_progress = Arc::new(on_progress);
         let mut proofs = Vec::new();
         for (idx, seed) in seeds.iter().copied().take(threads).enumerate() {
@@ -153,34 +126,29 @@ impl MintState {
     pub async fn send_mint_transaction(
         &self,
         seed: CoinID,
-        seed_data: CoinData,
         difficulty: usize,
         proof: Vec<u8>,
         ergs: CoinValue,
-    ) -> surf::Result<()> {
+    ) -> surf::Result<TxHash> {
         let own_cov = self.wallet.summary().await?.address;
         let tx = self
             .wallet
             .prepare_transaction(
                 TxKind::DoscMint,
                 vec![seed],
-                vec![
-                    CoinData {
-                        denom: Denom::Erg,
-                        value: ergs,
-                        additional_data: vec![],
-                        covhash: own_cov,
-                    },
-                    seed_data,
-                ],
+                vec![CoinData {
+                    denom: Denom::Erg,
+                    value: ergs,
+                    additional_data: vec![],
+                    covhash: own_cov,
+                }],
                 vec![],
                 (difficulty, proof).stdcode(),
                 vec![Denom::Erg],
             )
             .await?;
         let txhash = self.wallet.send_tx(tx).await?;
-        self.wallet.wait_transaction(txhash).await?;
-        Ok(())
+        Ok(txhash)
     }
 
     // /// Sends a transaction out. What this actually does is to re-prepare another transaction with the same inputs, outputs, and data, so that the wallet can sign it properly.
