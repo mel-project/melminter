@@ -169,7 +169,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     let subworkers = subworkers.clone();
                     let worker = worker.clone();
                     let snapshot = snapshot.clone();
-                    Arc::new(smolscale::spawn(async move {
+                    Arc::new(smol::spawn(async move {
                         let mut previous: HashMap<usize, usize> = HashMap::new();
                         let mut _space = None;
                         let mut delta_sum = 0;

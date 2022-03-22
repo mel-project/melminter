@@ -33,7 +33,7 @@ fn main() -> surf::Result<()> {
 
     let opts: CmdOpts = CmdOpts::from_args();
     env_logger::init();
-    smolscale::block_on(async move {
+    smol::block_on(async move {
         let daemon = DaemonClient::new(opts.daemon);
         let backup_wallet = daemon
             .get_wallet(&opts.backup_wallet)

@@ -1583,7 +1583,6 @@ dependencies = [
  "serde",
  "serde_json",
  "smol",
- "smolscale",
  "stdcode",
  "structopt",
  "surf",
