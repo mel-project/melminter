@@ -99,10 +99,10 @@ impl MintState {
                 .hash();
             let chi = tmelcrypt::hash_keyed(&tip_header_hash, &seed.stdcode());
             let on_progress = on_progress.clone();
-            let core_ids = core_affinity::get_core_ids().unwrap();
-            let core_id = core_ids[idx % core_ids.len()];
+            // let core_ids = core_affinity::get_core_ids().unwrap();
+            // let core_id = core_ids[idx % core_ids.len()];
             let proof_fut = std::thread::spawn(move || {
-                core_affinity::set_for_current(core_id);
+                // core_affinity::set_for_current(core_id);
                 (
                     tip_cdh,
                     melpow::Proof::generate_with_progress(&chi, difficulty, |progress| {
