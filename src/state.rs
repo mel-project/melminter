@@ -130,7 +130,7 @@ impl MintState {
         proof: Vec<u8>,
         ergs: CoinValue,
     ) -> surf::Result<TxHash> {
-        self.wallet.unlock(Some("".to_string())).await?;
+        self.wallet.unlock(None).await?;
         let own_cov = self.wallet.summary().await?.address;
         let tx = self
             .wallet
