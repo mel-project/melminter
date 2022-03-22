@@ -109,7 +109,7 @@ impl MintState {
                         if fastrand::f64() < 0.001 {
                             on_progress(idx, progress)
                         }
-                    }), 
+                    }),
                 )
             });
             proofs.push(proof_fut);
@@ -130,6 +130,7 @@ impl MintState {
         proof: Vec<u8>,
         ergs: CoinValue,
     ) -> surf::Result<TxHash> {
+        self.wallet.unlock(Some("".to_string())).await?;
         let own_cov = self.wallet.summary().await?.address;
         let tx = self
             .wallet
