@@ -109,7 +109,7 @@ impl MintState {
                         if fastrand::f64() < 0.001 {
                             on_progress(idx, progress)
                         }
-                    }),
+                    }), 
                 )
             });
             proofs.push(proof_fut);

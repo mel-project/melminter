@@ -40,7 +40,7 @@ impl Worker {
         let (send_stop, recv_stop) = smol::channel::bounded(1);
         Self {
             send_stop,
-            _task: smolscale::spawn(main_async(config, recv_stop)),
+            _task: smol::spawn(main_async(config, recv_stop)),
         }
     }
 
