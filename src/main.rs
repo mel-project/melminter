@@ -1,4 +1,8 @@
-use std::{future::Future, time::Duration};
+use std::{
+    future::Future,
+    process::{Command, Stdio},
+    time::Duration,
+};
 
 use anyhow::Context;
 use cmdopts::CmdOpts;
@@ -6,10 +10,11 @@ use cmdopts::CmdOpts;
 use melwallet_client::DaemonClient;
 use prodash::{
     render::line::{self, StreamKind},
-    Tree, Unit,
+    Tree,
 };
 use structopt::StructOpt;
-use themelio_structs::{CoinData, CoinValue, Denom, NetID, TxKind};
+use tap::Tap;
+use themelio_structs::{CoinValue, NetID};
 
 mod cmdopts;
 mod state;
@@ -34,12 +39,38 @@ fn main() -> surf::Result<()> {
     let opts: CmdOpts = CmdOpts::from_args();
     env_logger::init();
     smol::block_on(async move {
-        let daemon = DaemonClient::new(opts.daemon);
-        let backup_wallet = daemon
-            .get_wallet(&opts.backup_wallet)
-            .await?
-            .context("backup wallet does not exist")?;
-        let network_id = backup_wallet.summary().await?.network;
+        // either start a daemon, or use the provided one
+        let mut _running_daemon = None;
+        let daemon_addr = if let Some(addr) = opts.daemon {
+            addr
+        } else {
+            // start a daemon naw
+            let port = fastrand::usize(5000..15000);
+            let daemon = Command::new("melwalletd")
+                .arg("--listen")
+                .arg(format!("127.2.3.4:{}", port))
+                .arg("--wallet-dir")
+                .arg(dirs::config_dir().unwrap().tap_mut(|p| p.push("melminter")))
+                .stderr(Stdio::null())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap();
+            smol::Timer::after(Duration::from_secs(1)).await;
+            _running_daemon = Some(daemon);
+            format!("127.2.3.4:{}", port).parse().unwrap()
+        };
+        scopeguard::defer!({
+            if let Some(mut d) = _running_daemon {
+                let _ = d.kill();
+            }
+        });
+        let daemon = DaemonClient::new(daemon_addr);
+        let network_id = if opts.testnet {
+            NetID::Testnet
+        } else {
+            NetID::Mainnet
+        };
         // workers
         let mut workers = vec![];
         let wallet_name = format!("{}{:?}", opts.wallet_prefix, network_id);
@@ -51,11 +82,7 @@ fn main() -> surf::Result<()> {
                 evt.init(None, None);
                 log::info!("creating new wallet");
                 daemon
-                    .create_wallet(
-                        dbg!(&wallet_name),
-                        backup_wallet.summary().await?.network == NetID::Testnet,
-                        None,
-                    )
+                    .create_wallet(&wallet_name, opts.testnet, None)
                     .await?;
                 daemon
                     .get_wallet(&wallet_name)
@@ -64,10 +91,9 @@ fn main() -> surf::Result<()> {
             }
         };
         worker_wallet.unlock(None).await?;
-        let worker_address = worker_wallet.summary().await?.address;
 
         // Move money if wallet does not have enough money
-        if worker_wallet
+        while worker_wallet
             .summary()
             .await?
             .detailed_balance
@@ -76,33 +102,19 @@ fn main() -> surf::Result<()> {
             .unwrap_or(CoinValue(0))
             < CoinValue::from_millions(1u64) / 20
         {
-            let mut evt = dash_root.add_child("moving money from the backup wallet");
-            evt.init(None, Some(Unit::from("")));
-            let tx = backup_wallet
-                .prepare_transaction(
-                    TxKind::Normal,
-                    vec![],
-                    vec![CoinData {
-                        covhash: worker_address,
-                        value: CoinValue::from_millions(1u64) / 10,
-                        denom: Denom::Mel,
-                        additional_data: vec![],
-                    }],
-                    vec![],
-                    vec![],
-                    vec![],
-                )
-                .await?;
-            let txhash = backup_wallet.send_tx(tx).await?;
-            log::warn!("waiting for txhash {:?}...", txhash);
-            backup_wallet.wait_transaction(txhash).await?;
+            let _evt = dash_root
+                .add_child("Melminter requires a small amount of 'seed' MEL to start minting.");
+            let _evt = dash_root.add_child(format!(
+                "Please send at least 0.1 MEL to {}",
+                worker_wallet.summary().await?.address
+            ));
+            smol::Timer::after(Duration::from_secs(1)).await;
         }
 
         workers.push(Worker::start(WorkerConfig {
             wallet: worker_wallet,
-            backup: backup_wallet.clone(),
-            connect: themelio_bootstrap::bootstrap_routes(backup_wallet.summary().await?.network)
-                [0],
+            payout: opts.payout,
+            connect: themelio_bootstrap::bootstrap_routes(network_id)[0],
             name: "".into(),
             tree: dash_root.clone(),
             threads: opts.threads.unwrap_or_else(num_cpus::get_physical),

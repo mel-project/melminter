@@ -15,13 +15,15 @@ use smol::{
 };
 use themelio_nodeprot::ValClient;
 use themelio_stf::{melpow, PoolKey};
-use themelio_structs::{CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, TxKind};
+use themelio_structs::{
+    Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, TxKind,
+};
 
 /// Worker configuration
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
     pub wallet: WalletClient,
-    pub backup: WalletClient,
+    pub payout: Address,
     pub connect: SocketAddr,
     pub name: String,
     pub tree: prodash::Tree,
@@ -106,14 +108,13 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     "transferring {} MEL of profits to backup wallet",
                     our_mels
                 ));
-                let backup_wallet = opts.backup.summary().await?.address;
                 let to_send = opts
                     .wallet
                     .prepare_transaction(
                         TxKind::Normal,
                         vec![],
                         vec![CoinData {
-                            covhash: backup_wallet,
+                            covhash: opts.payout,
                             value: to_convert,
                             additional_data: vec![],
                             denom: Denom::Mel,
@@ -127,10 +128,6 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 opts.wallet.wait_transaction(h).await?;
             }
 
-            worker.lock().unwrap().message(
-                MessageLevel::Info,
-                format!("My estimated speed: {:.3} kH/s", my_speed / 1000.0),
-            );
             let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 3600.0 })
                 .log2()
                 .ceil() as usize;
@@ -169,6 +166,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     let subworkers = subworkers.clone();
                     let worker = worker.clone();
                     let snapshot = snapshot.clone();
+                    let wallet = opts.wallet.clone();
                     Arc::new(smol::spawn(async move {
                         let mut previous: HashMap<usize, usize> = HashMap::new();
                         let mut _space = None;
@@ -196,9 +194,11 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                                 .clone()
                                 .swap_many((erg_per_day * 10000.0) as u128, 0);
                             let mel_per_day = mel_per_day as f64 / 10000.0;
+                            let summary = wallet.summary().await.unwrap();
+                            let balance = summary.detailed_balance.get("6d").unwrap();
                             let mut new = worker.lock().unwrap().add_child(format!(
-                                "daily return: {:.3} DOSC ≈ {:.3} ERG ≈ {:.3} MEL ",
-                                dosc_per_day, erg_per_day, mel_per_day
+                                "daily return: {:.3} DOSC ≈ {:.3} ERG ≈ {:.3} MEL; fee reserve {} MEL",
+                                dosc_per_day, erg_per_day, mel_per_day, balance
                             ));
                             new.init(None, None);
                             _space = Some(new)
