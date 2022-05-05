@@ -5,7 +5,7 @@ use melwallet_client::WalletClient;
 use serde::{Deserialize, Serialize};
 use stdcode::StdcodeSerializeExt;
 use themelio_nodeprot::ValClient;
-use themelio_stf::{melpow, PoolKey};
+use themelio_stf::{PoolKey, Tip910MelPowHash};
 use themelio_structs::{CoinData, CoinDataHeight, CoinID, CoinValue, Denom, TxHash, TxKind};
 
 use crate::repeat_fallible;
@@ -105,11 +105,16 @@ impl MintState {
                 // core_affinity::set_for_current(core_id);
                 (
                     tip_cdh,
-                    melpow::Proof::generate_with_progress(&chi, difficulty, |progress| {
-                        if fastrand::f64() < 0.001 {
-                            on_progress(idx, progress)
-                        }
-                    }),
+                    melpow::Proof::generate_with_progress(
+                        &chi,
+                        difficulty,
+                        |progress| {
+                            if fastrand::f64() < 0.1 {
+                                on_progress(idx, progress)
+                            }
+                        },
+                        Tip910MelPowHash,
+                    ),
                 )
             });
             proofs.push(proof_fut);

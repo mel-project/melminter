@@ -14,7 +14,7 @@ use smol::{
     Task,
 };
 use themelio_nodeprot::ValClient;
-use themelio_stf::{melpow, PoolKey};
+use themelio_stf::{PoolKey, Tip910MelPowHash};
 use themelio_structs::{
     Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, TxKind,
 };
@@ -161,7 +161,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 let subworkers = Arc::new(DashMap::new());
                 let worker = worker.clone();
 
-                // background task that talllies speeds
+                // background task that tallies speeds
                 let speed_task: Arc<Task<()>> = {
                     let subworkers = subworkers.clone();
                     let worker = worker.clone();
@@ -207,7 +207,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 };
 
                 async move {
-                    let total = 1usize << (my_difficulty.saturating_sub(10));
+                    let total = 100 * (1usize << (my_difficulty.saturating_sub(10)));
                     let res = mint_state
                         .mint_batch(
                             my_difficulty,
@@ -259,6 +259,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                                 reward_speed,
                                 snap.current_header().dosc_speed,
                                 my_difficulty as u32,
+                                true
                             );
                             let reward_ergs =
                                 themelio_stf::dosc_to_erg(snap.current_header().height, reward);
@@ -317,7 +318,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
 async fn compute_speed() -> f64 {
     for difficulty in 1.. {
         let start = Instant::now();
-        smol::unblock(move || melpow::Proof::generate(&[], difficulty)).await;
+        smol::unblock(move || melpow::Proof::generate(&[], difficulty, Tip910MelPowHash)).await;
         let elapsed = start.elapsed();
         let speed = 2.0f64.powi(difficulty as _) / elapsed.as_secs_f64();
         if elapsed.as_secs_f64() > 0.5 {

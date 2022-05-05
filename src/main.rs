@@ -82,7 +82,7 @@ fn main() -> surf::Result<()> {
                 evt.init(None, None);
                 log::info!("creating new wallet");
                 daemon
-                    .create_wallet(&wallet_name, opts.testnet, None)
+                    .create_wallet(&wallet_name, opts.testnet, None, None)
                     .await?;
                 daemon
                     .get_wallet(&wallet_name)
