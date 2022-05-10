@@ -58,7 +58,7 @@ fn main() -> surf::Result<()> {
                 .unwrap();
             smol::Timer::after(Duration::from_secs(1)).await;
             _running_daemon = Some(daemon);
-            format!("127.2.3.4:{}", port).parse().unwrap()
+            format!("127.0.0.1:{}", port).parse().unwrap()
         };
         scopeguard::defer!({
             if let Some(mut d) = _running_daemon {
