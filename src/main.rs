@@ -48,7 +48,7 @@ fn main() -> surf::Result<()> {
             let port = fastrand::usize(5000..15000);
             let daemon = Command::new("melwalletd")
                 .arg("--listen")
-                .arg(format!("127.2.3.4:{}", port))
+                .arg(format!("127.0.0.1:{}", port))
                 .arg("--wallet-dir")
                 .arg(dirs::config_dir().unwrap().tap_mut(|p| p.push("melminter")))
                 .stderr(Stdio::null())
