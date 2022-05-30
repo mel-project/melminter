@@ -14,9 +14,9 @@ use smol::{
     Task,
 };
 use themelio_nodeprot::ValClient;
-use themelio_stf::{PoolKey, Tip910MelPowHash};
+use themelio_stf::Tip910MelPowHash;
 use themelio_structs::{
-    Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, TxKind,
+    Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, PoolKey, TxKind,
 };
 
 /// Worker configuration

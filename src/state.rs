@@ -5,8 +5,10 @@ use melwallet_client::WalletClient;
 use serde::{Deserialize, Serialize};
 use stdcode::StdcodeSerializeExt;
 use themelio_nodeprot::ValClient;
-use themelio_stf::{PoolKey, Tip910MelPowHash};
-use themelio_structs::{CoinData, CoinDataHeight, CoinID, CoinValue, Denom, TxHash, TxKind};
+use themelio_stf::Tip910MelPowHash;
+use themelio_structs::{
+    CoinData, CoinDataHeight, CoinID, CoinValue, Denom, PoolKey, TxHash, TxKind,
+};
 
 use crate::repeat_fallible;
 
