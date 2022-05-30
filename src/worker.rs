@@ -128,7 +128,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 opts.wallet.wait_transaction(h).await?;
             }
 
-            let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 3600.0 })
+            let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 30000.0 })
                 .log2()
                 .ceil() as usize;
             let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
@@ -254,7 +254,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                         let reward_ergs = loop {
                             let snap = client.snapshot().await?;
                             let reward_speed = 2u128.pow(my_difficulty as u32)
-                                / (snap.current_header().height.0 + 10 - data.height.0) as u128;
+                                / (snap.current_header().height.0 + 40 - data.height.0) as u128;
                             let reward = themelio_stf::calculate_reward(
                                 reward_speed * 100,
                                 snap.current_header().dosc_speed,
@@ -273,7 +273,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                                 .await
                             {
                                 Err(err) => {
-                                    if err.to_string().contains("preparation") {
+                                    if err.to_string().contains("preparation") || err.to_string().contains("timeout") {
                                         let mut sub = sub.add_child("waiting for available coins");
                                         sub.init(None, None);
                                         smol::Timer::after(Duration::from_secs(10)).await;
