@@ -25,4 +25,8 @@ pub struct CmdOpts {
     #[structopt(long)]
     /// Force a certain number of threads. Defaults to the number of *physical* CPUs.
     pub threads: Option<usize>,
+
+    // #[structopt(long)]
+    // /// Drain the fee reserve at the start.
+    // pub drain_reserve: bool,
 }
