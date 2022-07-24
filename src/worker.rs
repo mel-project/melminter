@@ -169,6 +169,8 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 let subworkers = Arc::new(DashMap::new());
                 let worker = worker.clone();
 
+                let total = 100 * (1usize << (my_difficulty.saturating_sub(10)));
+
                 // background task that tallies speeds
                 let speed_task: Arc<Task<()>> = {
                     let subworkers = subworkers.clone();
@@ -180,14 +182,20 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                         let mut _space = None;
                         let mut delta_sum = 0;
                         let start = Instant::now();
+
+                        let total_sum = (total * threads) as f64;
                         loop {
                             smol::Timer::after(Duration::from_secs(1)).await;
+
+                            let mut curr_sum = 0;
                             subworkers.iter().for_each(|pp: RefMulti<usize, Item>| {
                                 let prev = previous.entry(*pp.key()).or_insert(0usize);
-                                let curr = pp.value().step().unwrap_or_default();
+                                let curr = pp.value().step().unwrap_or_default(); curr_sum += curr;
                                 delta_sum += curr.saturating_sub(*prev);
                                 *prev = curr;
                             });
+                            let curr_sum = curr_sum as f64;
+
                             let speed = (delta_sum * 1024) as f64 / start.elapsed().as_secs_f64();
                             let per_core_speed = speed / (threads as f64);
                             let dosc_per_day =
@@ -203,10 +211,11 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                                 .swap_many((erg_per_day * 10000.0) as u128, 0);
                             let mel_per_day = mel_per_day as f64 / 10000.0;
                             let summary = wallet.summary().await.unwrap();
-                            let balance = summary.detailed_balance.get("6d").unwrap();
+                            let mel_balance = summary.detailed_balance.get("6d").unwrap();
                             let mut new = worker.lock().unwrap().add_child(format!(
-                                "daily return: {:.3} DOSC ≈ {:.3} ERG ≈ {:.3} MEL; fee reserve {} MEL",
-                                dosc_per_day, erg_per_day, mel_per_day, balance
+                                "current progress: {} | expected daily return: {:.3} DOSC ≈ {:.3} ERG ≈ {:.3} MEL | fee reserve: {} MEL",
+                                if curr_sum <= 0.0 { "N/A".to_string() } else { format!("{:.2} %", 100.0/(total_sum/curr_sum)) },
+                                dosc_per_day, erg_per_day, mel_per_day, mel_balance
                             ));
                             new.init(None, None);
                             _space = Some(new)
@@ -215,7 +224,6 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 };
 
                 async move {
-                    let total = 100 * (1usize << (my_difficulty.saturating_sub(10)));
                     let res = mint_state
                         .mint_batch(
                             my_difficulty,
