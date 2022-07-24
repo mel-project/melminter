@@ -22,6 +22,9 @@ mod worker;
 // use smol::prelude::*;
 use crate::worker::{Worker, WorkerConfig};
 
+// get the version of this program itself (avoid use 'env!' because it will crashes if the program is compiled without cargo)
+const VERSION: Option<&str> = option_env!("CARGO_PKG_VERSION");
+
 fn main() -> surf::Result<()> {
     // let log_conf = std::env::var("RUST_LOG").unwrap_or_else(|_| "melminter=debug,warn".into());
     // std::env::set_var("RUST_LOG", log_conf);
@@ -71,10 +74,14 @@ fn main() -> surf::Result<()> {
         } else {
             NetID::Mainnet
         };
+
+        println!("MelMinter v{} / melwalletd at {}", VERSION.unwrap_or("(N/A)"), daemon_addr);
+        println!("");
+
         // workers
         let mut workers = vec![];
         let wallet_name = format!("{}{:?}", opts.wallet_prefix, network_id);
-        // make sure the worker has enough money
+        // make sure the working-wallet exists
         let worker_wallet = match daemon.get_wallet(&wallet_name).await? {
             Some(wallet) => wallet,
             None => {
@@ -92,7 +99,7 @@ fn main() -> surf::Result<()> {
         };
         worker_wallet.unlock(None).await?;
 
-        // Move money if wallet does not have enough money
+        // make sure the working-wallet has enough money (for paying fees)
         while worker_wallet
             .summary()
             .await?
@@ -103,7 +110,7 @@ fn main() -> surf::Result<()> {
             < CoinValue::from_millions(1u64) / 20
         {
             let _evt = dash_root
-                .add_child("Melminter requires a small amount of 'seed' MEL to start minting.");
+                .add_child("The balance of melminter working wallet is less than 0.05! melminter requires a small amount of 'seed' MEL to start minting... (used by paying network fees)");
             let _evt = dash_root.add_child(format!(
                 "Please send at least 0.1 MEL to {}",
                 worker_wallet.summary().await?.address
