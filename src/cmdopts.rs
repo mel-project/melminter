@@ -26,6 +26,10 @@ pub struct CmdOpts {
     /// Force a certain number of threads. Defaults to the number of *physical* CPUs.
     pub threads: Option<usize>,
 
+    #[structopt(long)]
+    /// Is this program should be skipping the check that require amount is greater than or equal to 0.05
+    pub skip_amount_check: bool,
+
     // #[structopt(long)]
     // /// Drain the fee reserve at the start.
     // pub drain_reserve: bool,

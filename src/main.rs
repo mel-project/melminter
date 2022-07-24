@@ -109,6 +109,8 @@ fn main() -> surf::Result<()> {
                 worker_wallet.summary().await?.address
             ));
             smol::Timer::after(Duration::from_secs(1)).await;
+
+            if opts.skip_amount_check { break; }
         }
 
         workers.push(Worker::start(WorkerConfig {
