@@ -30,6 +30,10 @@ pub struct CmdOpts {
     /// Is this program should be skipping the check that require amount is greater than or equal to 0.05
     pub skip_amount_check: bool,
 
+    #[structopt(long)]
+    /// If you want, you can specify a fixed difficulty here, otherwise this program will automatic to select one. (PLEASE NOTE: this value should be chosen carefully! if you enter a too small value, your incomes may not be cover the expenses, because the ERG you minted may not be enough to cover the network fee for doscMint transactions)
+    pub fixed_diff: Option<usize>,
+
     // #[structopt(long)]
     // /// Drain the fee reserve at the start.
     // pub drain_reserve: bool,

@@ -120,6 +120,7 @@ fn main() -> surf::Result<()> {
             name: "".into(),
             tree: dash_root.clone(),
             threads: opts.threads.unwrap_or_else(num_cpus::get_physical),
+            diff: opts.fixed_diff,
         }));
 
         smol::future::pending().await

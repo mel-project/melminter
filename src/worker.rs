@@ -28,6 +28,7 @@ pub struct WorkerConfig {
     pub name: String,
     pub tree: prodash::Tree,
     pub threads: usize,
+    pub diff: Option<usize>, // "Some" if difficulty is fixed, else automatic diff
 }
 
 /// Represents a worker.
@@ -128,15 +129,22 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 opts.wallet.wait_transaction(h).await?;
             }
 
-            let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 30000.0 })
-                .log2()
-                .ceil() as usize;
+            let my_difficulty = {
+                let auto = (my_speed * if is_testnet { 120.0 } else { 30000.0 }).log2().ceil() as usize;
+                match opts.diff {
+                    None => { auto },
+                    Some(diff) => { diff }
+                }
+            };
             let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
             worker.lock().unwrap().message(
                 MessageLevel::Info,
                 format!(
-                    "Selected difficulty: {} (approx. {:?} / tx)",
-                    my_difficulty, approx_iter
+                    "Selected difficulty {}: {} (approx. {:?} / tx)",
+
+                    if let Some(_) = opts.diff { "[fixed]" } else { "[auto]" },
+                    my_difficulty,
+                    approx_iter,
                 ),
             );
             // repeat because wallet could be out of money
