@@ -11,7 +11,9 @@ repository = "https://github.com/themeliolabs/melminter"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-themelio-nodeprot = "0.11.5"
+themelio-nodeprot = "0.12.0"
+#  nanorpc = "0.1.7"
+melnet2 = "0.1.4"
 tmelcrypt= "0.2.4"
 # melpow= { git = "https://github.com/themeliolabs/themelio-core" }
 structopt= "0.3.26"
@@ -30,7 +32,8 @@ themelio-stf = "0.11.4"
 melwallet-client= "0.6.7"
 num_cpus= "1.13.1"
 themelio-structs = "0.2.8"
-themelio-bootstrap = "0.6.1"
+# themelio-bootstrap = "0.6.1"
+themelio-bootstrap = { path = "../themelio-bootstrap" }
 fastrand= "1.8.0"
 prodash = { version = "18", features = ["render-tui", "render-tui-crossterm", "unit-human", "render-line", "render-line-crossterm"] }
 dashmap= "5.3.4"

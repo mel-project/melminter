@@ -7,13 +7,14 @@ use std::{
 
 use crate::{repeat_fallible, state::MintState};
 use dashmap::{mapref::multiple::RefMulti, DashMap};
+use melnet2::{wire::tcp::TcpBackhaul, Backhaul};
 use melwallet_client::WalletClient;
 use prodash::{messages::MessageLevel, tree::Item, unit::display::Mode};
 use smol::{
     channel::{Receiver, Sender},
     Task,
 };
-use themelio_nodeprot::ValClient;
+use themelio_nodeprot::{ValClient, NodeRpcClient};
 use themelio_stf::Tip910MelPowHash;
 use themelio_structs::{
     Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, PoolKey, TxKind,
@@ -86,7 +87,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 .copied()
                 .unwrap_or_default();
             if our_ergs > CoinValue(0) {
-                worker
+
                     .lock()
                     .unwrap()
                     .message(MessageLevel::Info, format!("CONVERTING {} ERG!", our_ergs));
@@ -329,14 +330,23 @@ async fn compute_speed() -> f64 {
 }
 
 async fn get_valclient(testnet: bool, connect: SocketAddr) -> anyhow::Result<ValClient> {
-    let client = themelio_nodeprot::ValClient::new(
+    let backhaul = TcpBackhaul::new();
+    let rpc_client = NodeRpcClient(
+        backhaul
+            .connect(connect.to_string().into())
+            .await
+            .expect("failed to create RPC client"),
+    );
+
+    let client = ValClient::new(
         if testnet {
             NetID::Testnet
         } else {
             NetID::Mainnet
         },
-        connect,
+        rpc_client,
     );
+
     if testnet {
         client.trust(themelio_bootstrap::checkpoint_height(NetID::Testnet).unwrap());
     } else {
