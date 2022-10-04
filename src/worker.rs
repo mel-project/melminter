@@ -14,7 +14,7 @@ use smol::{
     channel::{Receiver, Sender},
     Task,
 };
-use themelio_nodeprot::{ValClient, NodeRpcClient};
+use themelio_nodeprot::{NodeRpcClient, ValClient};
 use themelio_stf::Tip910MelPowHash;
 use themelio_structs::{
     Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, PoolKey, TxKind,
@@ -87,7 +87,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 .copied()
                 .unwrap_or_default();
             if our_ergs > CoinValue(0) {
-
+                worker
                     .lock()
                     .unwrap()
                     .message(MessageLevel::Info, format!("CONVERTING {} ERG!", our_ergs));
