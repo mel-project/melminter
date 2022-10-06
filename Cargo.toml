@@ -32,8 +32,7 @@ themelio-stf = "0.11.4"
 melwallet-client= "0.6.7"
 num_cpus= "1.13.1"
 themelio-structs = "0.2.8"
-# themelio-bootstrap = "0.6.1"
-themelio-bootstrap = { path = "../themelio-bootstrap" }
+themelio-bootstrap = "0.7.1"
 fastrand= "1.8.0"
 prodash = { version = "18", features = ["render-tui", "render-tui-crossterm", "unit-human", "render-line", "render-line-crossterm"] }
 dashmap= "5.3.4"
