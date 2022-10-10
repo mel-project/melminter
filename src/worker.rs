@@ -26,12 +26,14 @@ pub struct WorkerConfig {
     pub wallet: WalletClient,
     pub payout: Address,
     pub connect: SocketAddr,
+    pub network: NetID,
     pub name: String,
     pub tree: prodash::Tree,
     pub threads: usize,
 }
 
 /// Represents a worker.
+#[allow(unused)]
 pub struct Worker {
     send_stop: Sender<()>,
     _task: smol::Task<surf::Result<()>>,
@@ -48,7 +50,7 @@ impl Worker {
     }
 
     /// Waits for the worker to complete the current iteration, then stops it.
-    pub async fn wait(self) -> surf::Result<()> {
+    pub async fn _wait(self) -> surf::Result<()> {
         self.send_stop.send(()).await?;
         self._task.await
     }
@@ -61,7 +63,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
         let worker = Arc::new(Mutex::new(worker));
         let my_speed = compute_speed().await;
         let is_testnet = opts.wallet.summary().await?.network == NetID::Testnet;
-        let client = get_valclient(is_testnet, opts.connect).await?;
+        let client = get_valclient(&opts).await?;
 
         let mint_state = MintState::new(opts.wallet.clone(), client.clone());
 
@@ -329,28 +331,29 @@ async fn compute_speed() -> f64 {
     unreachable!()
 }
 
-async fn get_valclient(testnet: bool, connect: SocketAddr) -> anyhow::Result<ValClient> {
+async fn get_valclient(opts: &WorkerConfig) -> anyhow::Result<ValClient> {
     let backhaul = TcpBackhaul::new();
     let rpc_client = NodeRpcClient(
         backhaul
-            .connect(connect.to_string().into())
+            .connect(opts.connect.to_string().into())
             .await
             .expect("failed to create RPC client"),
     );
 
-    let client = ValClient::new(
-        if testnet {
-            NetID::Testnet
-        } else {
-            NetID::Mainnet
-        },
-        rpc_client,
-    );
+    let client = ValClient::new(opts.network, rpc_client);
 
-    if testnet {
-        client.trust(themelio_bootstrap::checkpoint_height(NetID::Testnet).unwrap());
-    } else {
-        client.trust(themelio_bootstrap::checkpoint_height(NetID::Mainnet).unwrap());
+    match opts.network {
+        NetID::Testnet => {
+            client.trust(themelio_bootstrap::checkpoint_height(NetID::Testnet).unwrap());
+        }
+        NetID::Mainnet => {
+            client.trust(themelio_bootstrap::checkpoint_height(NetID::Mainnet).unwrap());
+        }
+        _ => {
+            log::info!("Trusting insecure custom network: {:?}", opts.network);
+            client.insecure_latest_snapshot().await.unwrap();
+        }
     }
+
     Ok(client)
 }

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use structopt::StructOpt;
-use themelio_structs::Address;
+use themelio_structs::{Address, NetID};
 // use tmelcrypt::Ed25519SK;
 
 #[derive(Debug, StructOpt, Clone)]
@@ -19,13 +19,16 @@ pub struct CmdOpts {
     pub payout: Address,
 
     #[structopt(long)]
-    /// Whether to use testnet
+    /// Whether to use testnet.
     pub testnet: bool,
+
+    #[structopt(long)]
+    /// Custom network to connect to.
+    pub network: Option<NetID>,
 
     #[structopt(long)]
     /// Force a certain number of threads. Defaults to the number of *physical* CPUs.
     pub threads: Option<usize>,
-
     // #[structopt(long)]
     // /// Drain the fee reserve at the start.
     // pub drain_reserve: bool,

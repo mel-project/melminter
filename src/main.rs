@@ -66,7 +66,9 @@ fn main() -> surf::Result<()> {
             }
         });
         let daemon = DaemonClient::new(daemon_addr);
-        let network_id = if opts.testnet {
+        let network_id: NetID = if let Some(custom_network) = opts.network {
+            custom_network
+        } else if opts.testnet {
             NetID::Testnet
         } else {
             NetID::Mainnet
@@ -115,6 +117,7 @@ fn main() -> surf::Result<()> {
             wallet: worker_wallet,
             payout: opts.payout,
             connect: themelio_bootstrap::bootstrap_routes(network_id)[0],
+            network: network_id,
             name: "".into(),
             tree: dash_root.clone(),
             threads: opts.threads.unwrap_or_else(num_cpus::get_physical),

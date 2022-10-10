@@ -202,7 +202,7 @@ impl MintState {
     }
 
     /// Converts ERG to MEL
-    pub async fn erg_to_mel(&self, ergs: CoinValue) -> surf::Result<CoinValue> {
+    pub async fn _erg_to_mel(&self, ergs: CoinValue) -> surf::Result<CoinValue> {
         let mut pool = self
             .client
             .snapshot()
