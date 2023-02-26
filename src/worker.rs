@@ -6,28 +6,48 @@ use std::{
 };
 
 use crate::{repeat_fallible, state::MintState};
+use anyhow::Context;
 use dashmap::{mapref::multiple::RefMulti, DashMap};
-use melwallet_client::WalletClient;
+use melprot::Client;
+use melstf::Tip910MelPowHash;
+use melstructs::{
+    Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, PoolKey, TxHash, TxKind,
+};
+
+use melwalletd_prot::{types::PrepareTxArgs, MelwalletdClient};
 use prodash::{messages::MessageLevel, tree::Item, unit::display::Mode};
 use smol::{
     channel::{Receiver, Sender},
     Task,
 };
-use themelio_nodeprot::ValClient;
-use themelio_stf::Tip910MelPowHash;
-use themelio_structs::{
-    Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, PoolKey, TxKind,
-};
 
 /// Worker configuration
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct WorkerConfig {
-    pub wallet: WalletClient,
+    pub wallet_name: String,
+    pub daemon: Arc<MelwalletdClient>,
     pub payout: Address,
     pub connect: SocketAddr,
     pub name: String,
     pub tree: prodash::Tree,
     pub threads: usize,
+    pub testnet: bool,
+}
+
+impl WorkerConfig {
+    async fn wait_tx(&self, txhash: TxHash) -> surf::Result<()> {
+        while self
+            .daemon
+            .tx_status(self.wallet_name.clone(), txhash.0)
+            .await??
+            .context("no such")?
+            .confirmed_height
+            .is_none()
+        {
+            smol::Timer::after(Duration::from_secs(1)).await;
+        }
+        Ok(())
+    }
 }
 
 /// Represents a worker.
@@ -55,14 +75,17 @@ impl Worker {
 
 async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result<()> {
     let tree = opts.tree.clone();
-    repeat_fallible(|| async {
+    repeat_fallible(|| {let opts = opts.clone();
+        let tree = tree.clone();
+        let recv_stop = recv_stop.clone();
+         async move {
         let worker = tree.add_child("worker");
         let worker = Arc::new(Mutex::new(worker));
         let my_speed = compute_speed().await;
-        let is_testnet = opts.wallet.summary().await?.network == NetID::Testnet;
-        let client = get_valclient(is_testnet, opts.connect).await?;
+        let is_testnet = opts.testnet;
+        let client = get_client(is_testnet, opts.connect).await?;
 
-        let mint_state = MintState::new(opts.wallet.clone(), client.clone());
+        let mint_state = MintState::new(opts.daemon.clone(), opts.wallet_name.clone(), client.clone());
 
         loop {
             // turn off gracefully
@@ -70,19 +93,19 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 return Ok::<_, surf::Error>(());
             }
 
-            let snapshot = client.snapshot().await?;
+            let snapshot = client.latest_snapshot().await?;
             let erg_to_mel = snapshot
-                .get_pool(PoolKey::mel_and(Denom::Erg))
+                .get_pool(PoolKey::new(Denom::Mel, Denom::Erg))
                 .await?
                 .expect("must have erg-mel pool");
 
             // If we have any erg, convert it all to mel.
             let our_ergs = opts
-                .wallet
-                .summary()
-                .await?
+                .daemon
+                .wallet_summary(opts.wallet_name.clone())
+                .await??
                 .detailed_balance
-                .get("64")
+                .get("ERG")
                 .copied()
                 .unwrap_or_default();
             if our_ergs > CoinValue(0) {
@@ -95,11 +118,11 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
 
             // If we have more than 1 MEL, transfer 0.5 MEL to the backup wallet.
             let our_mels = opts
-                .wallet
-                .summary()
-                .await?
-                .detailed_balance
-                .get("6d")
+            .daemon
+            .wallet_summary(opts.wallet_name.clone())
+            .await??
+            .detailed_balance
+            .get("MEL")
                 .copied()
                 .unwrap_or_default();
             if our_mels > CoinValue::from_millions(1u8) {
@@ -109,23 +132,19 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     our_mels
                 ));
                 let to_send = opts
-                    .wallet
-                    .prepare_transaction(
-                        TxKind::Normal,
-                        vec![],
-                        vec![CoinData {
+                    .daemon
+                    .prepare_tx(
+                        opts.wallet_name.clone(),
+                        PrepareTxArgs{ kind: TxKind::Normal, inputs: vec![], outputs: vec![CoinData {
                             covhash: opts.payout,
                             value: to_convert,
-                            additional_data: vec![],
+                            additional_data: vec![].into(),
                             denom: Denom::Mel,
-                        }],
-                        vec![],
-                        vec![],
-                        vec![],
+                        }], covenants: vec![], data: vec![], nobalance: vec![], fee_ballast: 100 }
                     )
-                    .await?;
-                let h = opts.wallet.send_tx(to_send).await?;
-                opts.wallet.wait_transaction(h).await?;
+                    .await??;
+                let h = opts.daemon.send_tx(opts.wallet_name.clone(), to_send).await??;
+                opts.wait_tx(h).await?;
             }
 
             let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 30000.0 })
@@ -141,7 +160,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
             );
             // repeat because wallet could be out of money
             let threads = opts.threads;
-            let fastest_speed = client.snapshot().await?.current_header().dosc_speed as f64 / 30.0;
+            let fastest_speed = client.latest_snapshot().await?.current_header().dosc_speed as f64 / 30.0;
             worker.lock().unwrap().info(format!(
                 "Max speed on chain: {:.2} kH/s",
                 fastest_speed / 1000.0
@@ -166,7 +185,8 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     let subworkers = subworkers.clone();
                     let worker = worker.clone();
                     let snapshot = snapshot.clone();
-                    let wallet = opts.wallet.clone();
+                    let daemon = opts.daemon.clone();
+                    let opts = opts.clone();
                     Arc::new(smol::spawn(async move {
                         let mut previous: HashMap<usize, usize> = HashMap::new();
                         let mut _space = None;
@@ -185,7 +205,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                             let dosc_per_day =
                                 (per_core_speed / fastest_speed).powi(2) * (threads as f64);
                             let erg_per_day = dosc_per_day
-                                * (themelio_stf::dosc_to_erg(
+                                * (melstf::dosc_to_erg(
                                     snapshot.current_header().height,
                                     10000,
                                 ) as f64)
@@ -194,8 +214,8 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                                 .clone()
                                 .swap_many((erg_per_day * 10000.0) as u128, 0);
                             let mel_per_day = mel_per_day as f64 / 10000.0;
-                            let summary = wallet.summary().await.unwrap();
-                            let balance = summary.detailed_balance.get("6d").unwrap();
+                            let summary = daemon.wallet_summary(opts.wallet_name.clone()).await.unwrap().unwrap();
+                            let balance = summary.detailed_balance.get("MEL").unwrap();
                             let mut new = worker.lock().unwrap().add_child(format!(
                                 "daily return: {:.3} DOSC ≈ {:.3} ERG ≈ {:.3} MEL; fee reserve {} MEL",
                                 dosc_per_day, erg_per_day, mel_per_day, balance
@@ -252,17 +272,17 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     let reward_attempt = async {
                         // Retry until we don't see insufficient funds
                         let reward_ergs = loop {
-                            let snap = client.snapshot().await?;
+                            let snap = client.latest_snapshot().await?;
                             let reward_speed = 2u128.pow(my_difficulty as u32)
                                 / (snap.current_header().height.0 + 40 - data.height.0) as u128;
-                            let reward = themelio_stf::calculate_reward(
+                            let reward = melstf::calculate_reward(
                                 reward_speed * 100,
                                 snap.current_header().dosc_speed,
                                 my_difficulty as u32,
                                 true
                             );
                             let reward_ergs =
-                                themelio_stf::dosc_to_erg(snap.current_header().height, reward);
+                                melstf::dosc_to_erg(snap.current_header().height, reward);
                             match mint_state
                                 .send_mint_transaction(
                                     coin,
@@ -306,10 +326,10 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
             sub.init(Some(to_wait.len()), None);
             for to_wait in to_wait {
                 sub.inc();
-                opts.wallet.wait_transaction(to_wait).await?;
+                opts.wait_tx(to_wait).await?;
             }
         }
-    })
+    }})
     .await;
     Ok(())
 }
@@ -328,19 +348,20 @@ async fn compute_speed() -> f64 {
     unreachable!()
 }
 
-async fn get_valclient(testnet: bool, connect: SocketAddr) -> anyhow::Result<ValClient> {
-    let client = themelio_nodeprot::ValClient::new(
+async fn get_client(testnet: bool, connect: SocketAddr) -> anyhow::Result<Client> {
+    let client = Client::connect_http(
         if testnet {
             NetID::Testnet
         } else {
             NetID::Mainnet
         },
         connect,
-    );
+    )
+    .await?;
     if testnet {
-        client.trust(themelio_bootstrap::checkpoint_height(NetID::Testnet).unwrap());
+        client.trust(melbootstrap::checkpoint_height(NetID::Testnet).unwrap());
     } else {
-        client.trust(themelio_bootstrap::checkpoint_height(NetID::Mainnet).unwrap());
+        client.trust(melbootstrap::checkpoint_height(NetID::Mainnet).unwrap());
     }
     Ok(client)
 }

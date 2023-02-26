@@ -1,20 +1,22 @@
 use std::{
     future::Future,
     process::{Command, Stdio},
+    sync::Arc,
     time::Duration,
 };
 
 use anyhow::Context;
 use cmdopts::CmdOpts;
 
+use melstructs::{CoinValue, NetID};
 use melwallet_client::DaemonClient;
+use melwalletd_prot::MelwalletdClient;
 use prodash::{
     render::line::{self, StreamKind},
     Tree,
 };
 use structopt::StructOpt;
 use tap::Tap;
-use themelio_structs::{CoinValue, NetID};
 
 mod cmdopts;
 mod state;
@@ -65,7 +67,7 @@ fn main() -> surf::Result<()> {
                 let _ = d.kill();
             }
         });
-        let daemon = DaemonClient::new(daemon_addr);
+        let daemon = MelwalletdClient::from(DaemonClient::new(daemon_addr));
         let network_id = if opts.testnet {
             NetID::Testnet
         } else {
@@ -75,29 +77,28 @@ fn main() -> surf::Result<()> {
         let mut workers = vec![];
         let wallet_name = format!("{}{:?}", opts.wallet_prefix, network_id);
         // make sure the worker has enough money
-        let worker_wallet = match daemon.get_wallet(&wallet_name).await? {
-            Some(wallet) => wallet,
-            None => {
+        let daemon = match daemon.wallet_summary(wallet_name.clone()).await? {
+            Ok(wallet) => daemon,
+            Err(_) => {
                 let mut evt = dash_root.add_child(format!("creating new wallet {}", wallet_name));
                 evt.init(None, None);
                 log::info!("creating new wallet");
                 daemon
-                    .create_wallet(&wallet_name, opts.testnet, None, None)
-                    .await?;
+                    .create_wallet(wallet_name.clone(), "".into(), None)
+                    .await??;
                 daemon
-                    .get_wallet(&wallet_name)
-                    .await?
-                    .context("just-created wallet failed?!")?
             }
         };
-        worker_wallet.unlock(None).await?;
+        daemon
+            .unlock_wallet(wallet_name.clone(), "".into())
+            .await??;
 
         // Move money if wallet does not have enough money
-        while worker_wallet
-            .summary()
-            .await?
+        while daemon
+            .wallet_summary(wallet_name.clone())
+            .await??
             .detailed_balance
-            .get("6d")
+            .get("MEL")
             .copied()
             .unwrap_or(CoinValue(0))
             < CoinValue::from_millions(1u64) / 20
@@ -106,18 +107,20 @@ fn main() -> surf::Result<()> {
                 .add_child("Melminter requires a small amount of 'seed' MEL to start minting.");
             let _evt = dash_root.add_child(format!(
                 "Please send at least 0.1 MEL to {}",
-                worker_wallet.summary().await?.address
+                daemon.wallet_summary(wallet_name.clone()).await??.address
             ));
             smol::Timer::after(Duration::from_secs(1)).await;
         }
 
         workers.push(Worker::start(WorkerConfig {
-            wallet: worker_wallet,
+            daemon: Arc::new(daemon),
             payout: opts.payout,
-            connect: themelio_bootstrap::bootstrap_routes(network_id)[0],
+            connect: melbootstrap::bootstrap_routes(network_id)[0],
             name: "".into(),
             tree: dash_root.clone(),
             threads: opts.threads.unwrap_or_else(num_cpus::get_physical),
+            testnet: opts.testnet,
+            wallet_name: wallet_name.clone(),
         }));
 
         smol::future::pending().await

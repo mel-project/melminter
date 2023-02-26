@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
+use melstructs::Address;
 use structopt::StructOpt;
-use themelio_structs::Address;
 // use tmelcrypt::Ed25519SK;
 
 #[derive(Debug, StructOpt, Clone)]
@@ -25,7 +25,6 @@ pub struct CmdOpts {
     #[structopt(long)]
     /// Force a certain number of threads. Defaults to the number of *physical* CPUs.
     pub threads: Option<usize>,
-
     // #[structopt(long)]
     // /// Drain the fee reserve at the start.
     // pub drain_reserve: bool,
