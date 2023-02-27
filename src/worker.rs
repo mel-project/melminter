@@ -294,7 +294,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                             {
                                 Err(err) => {
                                     if err.to_string().contains("preparation") || err.to_string().contains("timeout") {
-                                        let mut sub = sub.add_child("waiting for available coins");
+                                        let mut sub = sub.add_child("waiting for available coins ".to_owned() + &err.to_string());
                                         sub.init(None, None);
                                         smol::Timer::after(Duration::from_secs(10)).await;
                                     } else {

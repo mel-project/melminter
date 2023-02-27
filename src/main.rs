@@ -51,6 +51,8 @@ fn main() -> surf::Result<()> {
             let daemon = Command::new("melwalletd")
                 .arg("--listen")
                 .arg(format!("127.0.0.1:{}", port))
+                .arg("--network")
+                .arg(if opts.testnet { "testnet" } else { "mainnet" })
                 .arg("--wallet-dir")
                 .arg(dirs::config_dir().unwrap().tap_mut(|p| p.push("melminter")))
                 .stderr(Stdio::null())

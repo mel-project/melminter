@@ -192,7 +192,7 @@ impl MintState {
                     }],
                     covenants: vec![],
                     data: (difficulty, proof).stdcode(),
-                    nobalance: vec![],
+                    nobalance: vec![Denom::Erg],
                     fee_ballast: 100,
                 },
             )
