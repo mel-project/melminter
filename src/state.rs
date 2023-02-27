@@ -6,7 +6,7 @@ use melstf::Tip910MelPowHash;
 use melstructs::{
     Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, PoolKey, TxHash, TxKind,
 };
-use melwallet_client::DaemonClient;
+
 use melwalletd_prot::{types::PrepareTxArgs, MelwalletdClient};
 use serde::{Deserialize, Serialize};
 use stdcode::StdcodeSerializeExt;
@@ -200,24 +200,6 @@ impl MintState {
         let txhash = self.daemon.send_tx(self.wallet.clone(), tx).await??;
         Ok(txhash)
     }
-
-    // /// Sends a transaction out. What this actually does is to re-prepare another transaction with the same inputs, outputs, and data, so that the wallet can sign it properly.
-    // pub async fn send_resigned_transaction(&self, transaction: Transaction) -> surf::Result<()> {
-    //     let resigned = self
-    //         .wallet
-    //         .prepare_transaction(
-    //             TxKind::DoscMint,
-    //             transaction.inputs.clone(),
-    //             transaction.outputs.clone(),
-    //             vec![],
-    //             transaction.data.clone(),
-    //             vec![Denom::Erg],
-    //         )
-    //         .await?;
-    //     let txhash = self.wallet.send_tx(resigned).await?;
-    //     self.wallet.wait_transaction(txhash).await?;
-    //     Ok(())
-    // }
 
     /// Converts a given number of doscs to mel.
     pub async fn convert_doscs(&self, doscs: CoinValue) -> surf::Result<()> {
