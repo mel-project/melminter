@@ -269,6 +269,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                 sub.init(Some(batch.len()), None);
                 for (coin, data, proof) in batch {
                     sub.inc();
+                    loop {
                     let reward_attempt = async {
                         // Retry until we don't see insufficient funds
                         let reward_ergs = loop {
@@ -300,7 +301,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                                     } else {
                                         anyhow::bail!(err)
                                     }
-                                }
+                                    }
                                 Ok(res) => {
                                     to_wait.push(res);
                                     break reward_ergs;
@@ -316,7 +317,10 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                             "FAILED a proof submission for some reason : {:?}",
                             err
                         ));
+                    } else {
+                        break
                     }
+                }
                 }
             }
             let mut sub = worker
