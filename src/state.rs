@@ -36,6 +36,16 @@ impl MintState {
     }
 
     /// Generates a list of "seed" coins.
+    ///
+    /// The minter needs to prove that it performed some computation between some time `t` and now (Something like `H(H(H(x)))`).
+    /// where `x` is only known to it after a certain amount of time `t` has passed.
+    ///
+    /// To ensure that `x` is unique and NOT reusable to produce multiple proofs, so we
+    /// calculate it with the following:
+    /// 1. The spending of these "seed" coins The coins can only be spent
+    /// once.
+    /// 2. The block hash of the block containining the transaction that produced the first coin
+    ///    being spent - this is a value that isn't known until that block is produced.
     pub async fn generate_seeds(&self, threads: usize) -> surf::Result<()> {
         let my_address = self
             .daemon
