@@ -1,25 +1,16 @@
-use std::{
-    collections::BTreeMap,
-    fs::File,
-    future::Future,
-    io::{Read, Write},
-    net::SocketAddr,
-    time::Duration,
-};
+use std::{future::Future, time::Duration};
 
 use cmdopts::CmdOpts;
 
-use melprot::Client;
-use melstructs::{BlockHeight, CoinValue, Denom, NetID};
-use melwallet::Wallet;
+use melstructs::{CoinValue, Denom, NetID};
+
 use prodash::{
     render::line::{self, StreamKind},
     Tree,
 };
-use serde::{Deserialize, Serialize};
+
 use state::MintState;
 use structopt::StructOpt;
-use tmelcrypt::Ed25519SK;
 
 mod cmdopts;
 mod state;
@@ -27,7 +18,7 @@ mod worker;
 // use smol::prelude::*;
 use crate::worker::{Worker, WorkerConfig};
 
-fn main() -> surf::Result<()> {
+fn main() -> anyhow::Result<()> {
     // let log_conf = std::env::var("RUST_LOG").unwrap_or_else(|_| "melminter=debug,warn".into());
     // std::env::set_var("RUST_LOG", log_conf);
 
@@ -43,16 +34,8 @@ fn main() -> surf::Result<()> {
 
     let opts: CmdOpts = CmdOpts::from_args();
     env_logger::init();
-    smol::block_on(async move {
-        let network_id = if opts.testnet {
-            NetID::Testnet
-        } else {
-            NetID::Mainnet
-        };
-        let wallet_name = format!("{}{:?}", opts.wallet_prefix, network_id);
-        let (wallet, sk) = import_or_default(&wallet_name, network_id).await?;
-        let client = get_client(network_id, melbootstrap::bootstrap_routes(network_id)[0]).await?;
-        let state = MintState::new(wallet, sk, client);
+    smolscale::block_on(async move {
+        let state = MintState::open(&opts.state, opts.network).await?;
 
         // background task to continually sync wallet
 
@@ -85,7 +68,7 @@ fn main() -> surf::Result<()> {
             name: "".into(),
             tree: dash_root.clone(),
             threads: opts.threads.unwrap_or_else(num_cpus::get_physical),
-            testnet: opts.testnet,
+            testnet: opts.network == NetID::Testnet,
         }));
 
         smol::future::pending().await
@@ -103,51 +86,4 @@ async fn repeat_fallible<T, E: std::fmt::Debug, F: Future<Output = Result<T, E>>
         }
         smol::Timer::after(Duration::from_secs(1)).await;
     }
-}
-
-#[derive(Serialize, Deserialize)]
-struct WalletSecret(Ed25519SK);
-
-async fn import_or_default(
-    wallet_name: &str,
-    network_id: NetID,
-) -> anyhow::Result<(Wallet, Ed25519SK)> {
-    // attempt to retrieve the secret key stored at `wallet_name`.txt
-    let sk_file = wallet_name.to_owned() + ".txt";
-
-    let secret: Ed25519SK = if let Ok(mut sk_f) = File::open(sk_file.clone()) {
-        let mut sk_str = String::new();
-        sk_f.read_to_string(&mut sk_str)?;
-        println!("wallet_name content: {sk_str}");
-        let sk = serde_json::from_str(&sk_str)?;
-        sk
-    } else {
-        let sk = Ed25519SK::generate();
-        let mut sk_f = File::create(sk_file)?;
-        let sk_str = serde_json::to_string(&sk)?;
-        sk_f.write(sk_str.as_bytes())?;
-        sk
-    };
-    // create new sk & store it
-    // make wallet
-    let cov = melvm::Covenant::std_ed25519_pk_new(secret.to_public());
-    let addr = cov.hash();
-    let wallet = Wallet {
-        address: addr,
-        height: BlockHeight(0),
-        confirmed_utxos: BTreeMap::new(),
-        pending_outgoing: BTreeMap::new(),
-        netid: network_id,
-    };
-    Ok((wallet, secret))
-}
-
-async fn get_client(network_id: NetID, connect: SocketAddr) -> anyhow::Result<Client> {
-    let client = Client::connect_http(network_id, connect).await?;
-    match network_id {
-        NetID::Testnet => client.trust(melbootstrap::checkpoint_height(NetID::Testnet).unwrap()),
-        NetID::Mainnet => client.trust(melbootstrap::checkpoint_height(NetID::Mainnet).unwrap()),
-        _ => anyhow::bail!("melminter only supported for testnet and mainnet"),
-    }
-    Ok(client)
 }

@@ -1,17 +1,17 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use bytes::Bytes;
 use melprot::{Client, CoinChange};
 use melstf::Tip910MelPowHash;
 use melstructs::{
-    Address, BlockHeight, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, PoolKey, Transaction,
-    TxHash, TxKind,
+    Address, BlockHeight, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, PoolKey,
+    Transaction, TxHash, TxKind,
 };
 
 use melwallet::{PrepareTxArgs, StdEd25519Signer, Wallet};
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
+
 use smol::Task;
 use stdcode::StdcodeSerializeExt;
 use tmelcrypt::Ed25519SK;
@@ -26,22 +26,8 @@ pub struct MintState {
     _wallet_sync_task: Arc<Task<()>>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct PrepareReq {
-    signing_key: String,
-    outputs: Vec<CoinData>,
-}
-
 async fn wallet_sync_loop(wallet: Arc<Mutex<Wallet>>, client: Client) -> anyhow::Result<()> {
-    // resync everything in the beginning
-    let latest_snapshot = client.latest_snapshot().await?;
     let wallet_addr = wallet.lock().address;
-    if let Some(owned_coins) = latest_snapshot.get_coins(wallet_addr).await? {
-        eprintln!("initially loading wallet with coins {:?}!", owned_coins);
-        wallet
-            .lock()
-            .full_reset(latest_snapshot.current_header().height, owned_coins)?
-    }
     // sync new blocks in a loop
     loop {
         let latest_height = client.latest_snapshot().await?.current_header().height;
@@ -49,7 +35,7 @@ async fn wallet_sync_loop(wallet: Arc<Mutex<Wallet>>, client: Client) -> anyhow:
         for height in (wallet_height.0 + 1)..(latest_height.0 + 1) {
             let snapshot = client.snapshot(BlockHeight(height)).await?;
             let ccs = snapshot.get_coin_changes(wallet_addr).await?;
-            eprintln!("syncing at height {height} with coin changes {:?}!", ccs);
+            log::debug!("syncing at height {height} with coin changes {:?}!", ccs);
             let mut new_coins = vec![];
             let mut spent_coins = vec![];
             for cc in ccs {
@@ -86,17 +72,55 @@ async fn wallet_sync_loop(wallet: Arc<Mutex<Wallet>>, client: Client) -> anyhow:
     }
 }
 
+async fn open_wallet(client: &Client, secret: Ed25519SK) -> anyhow::Result<Wallet> {
+    // resync everything in the beginning
+    let latest_snapshot = client.latest_snapshot().await?;
+    let cov = melvm::Covenant::std_ed25519_pk_new(secret.to_public());
+    let addr = cov.hash();
+    let mut wallet = Wallet {
+        address: addr,
+        height: BlockHeight(0),
+        confirmed_utxos: BTreeMap::new(),
+        pending_outgoing: BTreeMap::new(),
+        netid: client.netid(),
+    };
+    let owned_coins = latest_snapshot
+        .get_coins(addr)
+        .await?
+        .context("server does not support coin index, but we need it")?;
+    log::debug!("initially loading wallet with coins {:?}!", owned_coins);
+    wallet.full_reset(latest_snapshot.current_header().height, owned_coins)?;
+    Ok(wallet)
+}
+
 impl MintState {
-    pub fn new(wallet: Wallet, sk: Ed25519SK, client: Client) -> Self {
+    /// Open a new MintState, given a folder where all persistent state is stored.
+    pub async fn open(state_folder: &Path, network: NetID) -> anyhow::Result<Self> {
+        std::fs::create_dir_all(state_folder)?;
+        let sk = {
+            let mut sk_path = state_folder.to_owned();
+            sk_path.push("secret");
+            match std::fs::read(&sk_path) {
+                Ok(bts) => stdcode::deserialize(&bts)?,
+                Err(_) => {
+                    // create a new secret key and store it
+                    let key = Ed25519SK::generate();
+                    std::fs::write(&sk_path, key.stdcode())?;
+                    key
+                }
+            }
+        };
+        let client = Client::autoconnect(network).await?;
+        let wallet = open_wallet(&client, sk).await?;
         let wallet = Arc::new(Mutex::new(wallet));
-        Self {
+        Ok(Self {
             wallet: wallet.clone(),
-            client: client.clone(),
             sk,
+            client: client.clone(),
             _wallet_sync_task: Arc::new(smolscale::spawn(repeat_fallible(move || {
                 wallet_sync_loop(wallet.clone(), client.clone())
             }))),
-        }
+        })
     }
 
     // helpers
@@ -128,7 +152,7 @@ impl MintState {
         Ok(())
     }
 
-    pub async fn wait_tx(&self, txhash: TxHash) -> surf::Result<()> {
+    pub async fn wait_tx(&self, txhash: TxHash) -> anyhow::Result<()> {
         while self.wallet.lock().pending_outgoing.get(&txhash).is_some() {
             smol::Timer::after(Duration::from_secs(1)).await;
         }
@@ -146,7 +170,7 @@ impl MintState {
     /// once.
     /// 2. The block hash of the block containining the transaction that produced the first coin
     ///    being spent - this is a value that isn't known until that block is produced.
-    pub async fn generate_seeds(&self, threads: usize) -> surf::Result<()> {
+    pub async fn generate_seeds(&self, threads: usize) -> anyhow::Result<()> {
         let my_address = self.wallet.lock().address;
         loop {
             let toret = self.get_seeds_raw().await?;
@@ -176,7 +200,7 @@ impl MintState {
         }
     }
 
-    async fn get_seeds_raw(&self) -> surf::Result<Vec<CoinID>> {
+    async fn get_seeds_raw(&self) -> anyhow::Result<Vec<CoinID>> {
         Ok(self
             .wallet
             .lock()
@@ -198,7 +222,7 @@ impl MintState {
         difficulty: usize,
         on_progress: impl Fn(usize, f64) + Sync + Send + 'static,
         threads: usize,
-    ) -> surf::Result<Vec<(CoinID, CoinDataHeight, Vec<u8>)>> {
+    ) -> anyhow::Result<Vec<(CoinID, CoinDataHeight, Vec<u8>)>> {
         let seeds = self.get_seeds_raw().await?;
         let on_progress = Arc::new(on_progress);
         let mut proofs = Vec::new();
@@ -215,7 +239,7 @@ impl MintState {
                 .await
                 .current_header()
                 .hash();
-            let chi = tmelcrypt::hash_keyed(&tip_header_hash, &seed.stdcode());
+            let chi = tmelcrypt::hash_keyed(tip_header_hash, &seed.stdcode());
             let on_progress = on_progress.clone();
             // let core_ids = core_affinity::get_core_ids().unwrap();
             // let core_id = core_ids[idx % core_ids.len()];
@@ -245,7 +269,7 @@ impl MintState {
         Ok(out)
     }
 
-    async fn address(&self) -> surf::Result<Address> {
+    async fn address(&self) -> anyhow::Result<Address> {
         Ok(self.wallet.lock().address)
     }
 
@@ -256,7 +280,7 @@ impl MintState {
         difficulty: usize,
         proof: Vec<u8>,
         ergs: CoinValue,
-    ) -> surf::Result<TxHash> {
+    ) -> anyhow::Result<TxHash> {
         let own_cov = self.wallet.lock().address;
         let height = self.wallet.lock().height;
         let seed_cdh = self
@@ -286,7 +310,7 @@ impl MintState {
     }
 
     /// Converts a given number of doscs to mel.
-    pub async fn convert_doscs(&self, doscs: CoinValue) -> surf::Result<()> {
+    pub async fn convert_doscs(&self, doscs: CoinValue) -> anyhow::Result<()> {
         let my_address = self.address().await?;
         let tx = self
             .prepare_tx(PrepareTxArgs {
@@ -307,17 +331,5 @@ impl MintState {
         self.send_raw(tx.clone()).await?;
         self.wait_tx(tx.hash_nosigs()).await?;
         Ok(())
-    }
-
-    /// Converts ERG to MEL
-    pub async fn erg_to_mel(&self, ergs: CoinValue) -> surf::Result<CoinValue> {
-        let mut pool = self
-            .client
-            .latest_snapshot()
-            .await?
-            .get_pool(PoolKey::new(Denom::Mel, Denom::Erg))
-            .await?
-            .expect("no erg/mel pool");
-        Ok(pool.swap_many(ergs.0, 0).1.into())
     }
 }

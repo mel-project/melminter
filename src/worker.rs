@@ -33,7 +33,7 @@ pub struct WorkerConfig {
 /// Represents a worker.
 pub struct Worker {
     send_stop: Sender<()>,
-    _task: smol::Task<surf::Result<()>>,
+    _task: smol::Task<anyhow::Result<()>>,
 }
 
 impl Worker {
@@ -42,18 +42,18 @@ impl Worker {
         let (send_stop, recv_stop) = smol::channel::bounded(1);
         Self {
             send_stop,
-            _task: smol::spawn(main_async(config, recv_stop)),
+            _task: smolscale::spawn(main_async(config, recv_stop)),
         }
     }
 
     /// Waits for the worker to complete the current iteration, then stops it.
-    pub async fn wait(self) -> surf::Result<()> {
+    pub async fn wait(self) -> anyhow::Result<()> {
         self.send_stop.send(()).await?;
         self._task.await
     }
 }
 
-async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result<()> {
+async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Result<()> {
     let tree = opts.tree.clone();
     repeat_fallible(|| {
         let tree = tree.clone();
@@ -69,7 +69,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
         loop {
             // turn off gracefully
             if recv_stop.try_recv().is_ok() {
-                return Ok::<_, surf::Error>(());
+                return Ok::<_, anyhow::Error>(());
             }
 
             let snapshot = mint_state.client.latest_snapshot().await?;
@@ -147,7 +147,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                     let worker = worker.clone();
                     let snapshot = snapshot.clone();
                     let mint_state = mint_state.clone();
-                    Arc::new(smol::spawn(async move {
+                    Arc::new(smolscale::spawn(async move {
                         let mut previous: HashMap<usize, usize> = HashMap::new();
                         let mut _space = None;
                         let mut delta_sum = 0;
@@ -184,7 +184,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                         }
                     }))
                 };
-                let mint_state = mint_state.clone();
+                let mint_state = mint_state;
                 async move {
                     let total = 100 * (1usize << (my_difficulty.saturating_sub(10)));
                     let res = mint_state
@@ -211,7 +211,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> surf::Result
                         )
                         .await?;
                     drop(speed_task);
-                    Ok::<_, surf::Error>(res)
+                    Ok::<_, anyhow::Error>(res)
                 }
             })
             .await;
