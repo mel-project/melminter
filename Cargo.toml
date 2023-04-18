@@ -6,14 +6,12 @@ edition = "2021"
 
 description = "official Melmint client"
 license = "MPL-2.0"
-repository = "https://github.com/themeliolabs/melminter"
+repository = "https://github.com/mel-project/melminter"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-
-tmelcrypt= "0.2.4"
-# melpow= { git = "https://github.com/themeliolabs/themelio-core" }
+tmelcrypt = "0.2.4"
 structopt= "0.3.26"
 tracing-subscriber = "0.3.15"
 log= "0.4.17"
@@ -27,7 +25,7 @@ hex= "0.4.3"
 surf={ version = "2.3.2", features = ["h1-client-rustls"], default-features = false }
 stdcode = "0.1.10"
 
-melwallet-client= "0.7.1"
+melwallet = {git = "https://github.com/mel-project/melwallet"}
 num_cpus= "1.13.1"
 
 fastrand= "1.8.0"
@@ -43,4 +41,7 @@ melstructs = "0.3.2"
 melprot = "0.13.2"
 melstf = "0.12.0"
 melbootstrap = "0.8.2"
-melwalletd-prot = "0.3.1"
+melvm = "0.1.1"
+smolscale = "0.3.52"
+parking_lot = "0.12.1"
+bytes = "1.4.0"

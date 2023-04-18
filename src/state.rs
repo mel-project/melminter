@@ -1,23 +1,29 @@
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use melprot::Client;
+use bytes::Bytes;
+use melprot::{Client, CoinChange};
 use melstf::Tip910MelPowHash;
 use melstructs::{
-    Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, PoolKey, TxHash, TxKind,
+    Address, BlockHeight, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, PoolKey, Transaction,
+    TxHash, TxKind,
 };
 
-use melwalletd_prot::{types::PrepareTxArgs, MelwalletdClient};
+use melwallet::{PrepareTxArgs, StdEd25519Signer, Wallet};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use smol::Task;
 use stdcode::StdcodeSerializeExt;
+use tmelcrypt::Ed25519SK;
 
 use crate::repeat_fallible;
 
 #[derive(Clone)]
 pub struct MintState {
-    daemon: Arc<MelwalletdClient>,
-    wallet: String,
-    client: Client,
+    pub wallet: Arc<Mutex<Wallet>>,
+    pub sk: Ed25519SK,
+    pub client: Client,
+    _wallet_sync_task: Arc<Task<()>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -26,13 +32,107 @@ struct PrepareReq {
     outputs: Vec<CoinData>,
 }
 
-impl MintState {
-    pub fn new(daemon: Arc<MelwalletdClient>, wallet: String, client: Client) -> Self {
-        Self {
-            daemon,
-            wallet,
-            client,
+async fn wallet_sync_loop(wallet: Arc<Mutex<Wallet>>, client: Client) -> anyhow::Result<()> {
+    // resync everything in the beginning
+    let latest_snapshot = client.latest_snapshot().await?;
+    let wallet_addr = wallet.lock().address;
+    if let Some(owned_coins) = latest_snapshot.get_coins(wallet_addr).await? {
+        eprintln!("initially loading wallet with coins {:?}!", owned_coins);
+        wallet
+            .lock()
+            .full_reset(latest_snapshot.current_header().height, owned_coins)?
+    }
+    // sync new blocks in a loop
+    loop {
+        let latest_height = client.latest_snapshot().await?.current_header().height;
+        let wallet_height = wallet.lock().height;
+        for height in (wallet_height.0 + 1)..(latest_height.0 + 1) {
+            let snapshot = client.snapshot(BlockHeight(height)).await?;
+            let ccs = snapshot.get_coin_changes(wallet_addr).await?;
+            eprintln!("syncing at height {height} with coin changes {:?}!", ccs);
+            let mut new_coins = vec![];
+            let mut spent_coins = vec![];
+            for cc in ccs {
+                match cc {
+                    CoinChange::Add(id) => {
+                        if let Some(data_height) = snapshot.get_coin(id).await? {
+                            new_coins.push((id, data_height.coin_data));
+                        }
+                    }
+                    CoinChange::Delete(id, _) => {
+                        spent_coins.push(id);
+                    }
+                }
+            }
+            wallet
+                .lock()
+                .add_coins(snapshot.current_header().height, new_coins, spent_coins)?;
         }
+        // if our wallet still has pending transactions new blocks have been produced, retransmit
+        if !wallet.lock().pending_outgoing.is_empty() && latest_height > wallet_height {
+            let pending_outgoing = wallet.lock().pending_outgoing.clone();
+            for (_, tx) in pending_outgoing.into_iter() {
+                client
+                    .latest_snapshot()
+                    .await?
+                    .get_raw()
+                    .send_tx(tx.clone())
+                    .await??;
+                wallet.lock().add_pending(tx);
+            }
+        }
+
+        smol::Timer::after(Duration::from_secs(10));
+    }
+}
+
+impl MintState {
+    pub fn new(wallet: Wallet, sk: Ed25519SK, client: Client) -> Self {
+        let wallet = Arc::new(Mutex::new(wallet));
+        Self {
+            wallet: wallet.clone(),
+            client: client.clone(),
+            sk,
+            _wallet_sync_task: Arc::new(smolscale::spawn(repeat_fallible(move || {
+                wallet_sync_loop(wallet.clone(), client.clone())
+            }))),
+        }
+    }
+
+    // helpers
+    pub async fn prepare_tx(&self, args: PrepareTxArgs) -> anyhow::Result<Transaction> {
+        let signer = StdEd25519Signer(self.sk);
+        let fee_multiplier = self
+            .client
+            .latest_snapshot()
+            .await?
+            .current_header()
+            .fee_multiplier;
+        let tx = self
+            .wallet
+            .lock()
+            .prepare_tx(args, &signer, fee_multiplier)?;
+        Ok(tx)
+    }
+
+    pub async fn send_raw(&self, tx: Transaction) -> anyhow::Result<()> {
+        let _ = self
+            .client
+            .latest_snapshot()
+            .await?
+            .get_raw()
+            .send_tx(tx.clone())
+            .await?;
+        self.wallet.lock().add_pending(tx);
+
+        Ok(())
+    }
+
+    pub async fn wait_tx(&self, txhash: TxHash) -> surf::Result<()> {
+        while self.wallet.lock().pending_outgoing.get(&txhash).is_some() {
+            smol::Timer::after(Duration::from_secs(1)).await;
+        }
+        Ok(())
     }
 
     /// Generates a list of "seed" coins.
@@ -42,16 +142,12 @@ impl MintState {
     ///
     /// To ensure that `x` is unique and NOT reusable to produce multiple proofs, so we
     /// calculate it with the following:
-    /// 1. The spending of these "seed" coins The coins can only be spent
+    /// 1. The spending of these "seed" coins: The coins can only be spent
     /// once.
     /// 2. The block hash of the block containining the transaction that produced the first coin
     ///    being spent - this is a value that isn't known until that block is produced.
     pub async fn generate_seeds(&self, threads: usize) -> surf::Result<()> {
-        let my_address = self
-            .daemon
-            .wallet_summary(self.wallet.clone())
-            .await??
-            .address;
+        let my_address = self.wallet.lock().address;
         loop {
             let toret = self.get_seeds_raw().await?;
             if toret.len() >= threads {
@@ -59,52 +155,35 @@ impl MintState {
             }
             // generate a bunch of custom-token utxos
             let tx = self
-                .daemon
-                .prepare_tx(
-                    self.wallet.clone(),
-                    PrepareTxArgs {
-                        kind: TxKind::Normal,
-                        inputs: vec![],
-                        outputs: std::iter::repeat_with(|| CoinData {
-                            covhash: my_address,
-                            denom: Denom::NewCustom,
-                            value: CoinValue(1),
-                            additional_data: vec![].into(),
-                        })
-                        .take(threads)
-                        .collect(),
-                        covenants: vec![],
-                        data: vec![],
-                        nobalance: vec![],
-                        fee_ballast: 100,
-                    },
-                )
-                .await??;
-            let sent_hash = self.daemon.send_tx(self.wallet.clone(), tx).await??;
-            self.wait_tx(sent_hash).await?;
+                .prepare_tx(PrepareTxArgs {
+                    kind: TxKind::Normal,
+                    inputs: vec![],
+                    outputs: std::iter::repeat_with(|| CoinData {
+                        covhash: my_address,
+                        denom: Denom::NewCustom,
+                        value: CoinValue(1),
+                        additional_data: vec![].into(),
+                    })
+                    .take(threads)
+                    .collect(),
+                    covenants: vec![],
+                    data: bytes::Bytes::new(),
+                    fee_ballast: 0,
+                })
+                .await?;
+            self.send_raw(tx.clone()).await?;
+            self.wait_tx(tx.hash_nosigs()).await?;
         }
     }
 
-    async fn wait_tx(&self, txhash: TxHash) -> surf::Result<()> {
-        while self
-            .daemon
-            .tx_status(self.wallet.clone(), txhash.0)
-            .await??
-            .context("no such")?
-            .confirmed_height
-            .is_none()
-        {
-            smol::Timer::after(Duration::from_secs(1)).await;
-        }
-        Ok(())
-    }
     async fn get_seeds_raw(&self) -> surf::Result<Vec<CoinID>> {
-        let unspent_coins = self.daemon.dump_coins(self.wallet.clone()).await??;
-
-        Ok(unspent_coins
+        Ok(self
+            .wallet
+            .lock()
+            .confirmed_utxos
             .iter()
             .filter_map(|(k, v)| {
-                if matches!(v.denom, Denom::Custom(_)) {
+                if matches!(v.coin_data.denom, Denom::Custom(_)) {
                     Some((k, v))
                 } else {
                     None
@@ -113,8 +192,7 @@ impl MintState {
             .map(|d| *d.0)
             .collect())
     }
-
-    /// Creates a partially-filled-in transaction, with the given difficulty, that's neither signed nor feed. The caller should fill in the DOSC output.
+    /// Creates a partially-filled-in transaction, with the given difficulty, that's neither signed nor fee'd. The caller should fill in the DOSC output.
     pub async fn mint_batch(
         &self,
         difficulty: usize,
@@ -168,11 +246,7 @@ impl MintState {
     }
 
     async fn address(&self) -> surf::Result<Address> {
-        Ok(self
-            .daemon
-            .wallet_summary(self.wallet.clone())
-            .await??
-            .address)
+        Ok(self.wallet.lock().address)
     }
 
     /// Sends a transaction.
@@ -183,59 +257,55 @@ impl MintState {
         proof: Vec<u8>,
         ergs: CoinValue,
     ) -> surf::Result<TxHash> {
-        self.daemon
-            .unlock_wallet(self.wallet.clone(), "".into())
-            .await??;
-        let own_cov = self.address().await?;
+        let own_cov = self.wallet.lock().address;
+        let height = self.wallet.lock().height;
+        let seed_cdh = self
+            .client
+            .snapshot(height)
+            .await?
+            .get_coin(seed)
+            .await?
+            .unwrap();
         let tx = self
-            .daemon
-            .prepare_tx(
-                self.wallet.clone(),
-                PrepareTxArgs {
-                    kind: TxKind::DoscMint,
-                    inputs: vec![seed],
-                    outputs: vec![CoinData {
-                        denom: Denom::Erg,
-                        value: ergs,
-                        additional_data: vec![].into(),
-                        covhash: own_cov,
-                    }],
-                    covenants: vec![],
-                    data: (difficulty, proof).stdcode(),
-                    nobalance: vec![Denom::Erg],
-                    fee_ballast: 100,
-                },
-            )
-            .await??;
-        let txhash = self.daemon.send_tx(self.wallet.clone(), tx).await??;
-        Ok(txhash)
+            .prepare_tx(PrepareTxArgs {
+                kind: TxKind::DoscMint,
+                inputs: vec![(seed, seed_cdh)],
+                outputs: vec![CoinData {
+                    denom: Denom::Erg,
+                    value: ergs,
+                    additional_data: vec![].into(),
+                    covhash: own_cov,
+                }],
+                covenants: vec![],
+                data: Bytes::copy_from_slice(&(difficulty, proof).stdcode()),
+                fee_ballast: 0,
+            })
+            .await?;
+        self.send_raw(tx.clone()).await?;
+        Ok(tx.hash_nosigs())
     }
 
     /// Converts a given number of doscs to mel.
     pub async fn convert_doscs(&self, doscs: CoinValue) -> surf::Result<()> {
         let my_address = self.address().await?;
         let tx = self
-            .daemon
-            .prepare_tx(
-                self.wallet.clone(),
-                PrepareTxArgs {
-                    kind: TxKind::Swap,
-                    inputs: vec![],
-                    outputs: vec![CoinData {
-                        covhash: my_address,
-                        value: doscs,
-                        denom: Denom::Erg,
-                        additional_data: vec![].into(),
-                    }],
-                    covenants: vec![],
-                    data: PoolKey::new(Denom::Mel, Denom::Erg).to_bytes().into(),
-                    nobalance: vec![],
-                    fee_ballast: 100,
-                },
-            )
-            .await??;
-        let txhash = self.daemon.send_tx(self.wallet.clone(), tx).await??;
-        self.wait_tx(txhash).await?;
+            .prepare_tx(PrepareTxArgs {
+                kind: TxKind::Swap,
+                inputs: vec![],
+                outputs: vec![CoinData {
+                    covhash: my_address,
+                    value: doscs,
+                    denom: Denom::Erg,
+                    additional_data: vec![].into(),
+                }],
+                covenants: vec![],
+                data: PoolKey::new(Denom::Mel, Denom::Erg).to_bytes(),
+                fee_ballast: 0,
+            })
+            .await?;
+
+        self.send_raw(tx.clone()).await?;
+        self.wait_tx(tx.hash_nosigs()).await?;
         Ok(())
     }
 

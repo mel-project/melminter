@@ -1,15 +1,9 @@
-use std::net::SocketAddr;
-
 use melstructs::Address;
 use structopt::StructOpt;
 // use tmelcrypt::Ed25519SK;
 
 #[derive(Debug, StructOpt, Clone)]
 pub struct CmdOpts {
-    #[structopt(long)]
-    /// Wallet API endpoint. For example localhost:11773
-    pub daemon: Option<SocketAddr>,
-
     #[structopt(long, default_value = "__melminter_")]
     /// Prefixes for the "owned" wallets created by the melminter.
     pub wallet_prefix: String,

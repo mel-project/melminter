@@ -1,22 +1,25 @@
 use std::{
+    collections::BTreeMap,
+    fs::File,
     future::Future,
-    process::{Command, Stdio},
-    sync::Arc,
+    io::{Read, Write},
+    net::SocketAddr,
     time::Duration,
 };
 
-use anyhow::Context;
 use cmdopts::CmdOpts;
 
-use melstructs::{CoinValue, NetID};
-use melwallet_client::DaemonClient;
-use melwalletd_prot::MelwalletdClient;
+use melprot::Client;
+use melstructs::{BlockHeight, CoinValue, Denom, NetID};
+use melwallet::Wallet;
 use prodash::{
     render::line::{self, StreamKind},
     Tree,
 };
+use serde::{Deserialize, Serialize};
+use state::MintState;
 use structopt::StructOpt;
-use tap::Tap;
+use tmelcrypt::Ed25519SK;
 
 mod cmdopts;
 mod state;
@@ -41,88 +44,48 @@ fn main() -> surf::Result<()> {
     let opts: CmdOpts = CmdOpts::from_args();
     env_logger::init();
     smol::block_on(async move {
-        // either start a daemon, or use the provided one
-        let mut _running_daemon = None;
-        let daemon_addr = if let Some(addr) = opts.daemon {
-            addr
-        } else {
-            // start a daemon naw
-            let port = fastrand::usize(5000..15000);
-            let daemon = Command::new("melwalletd")
-                .arg("--listen")
-                .arg(format!("127.0.0.1:{}", port))
-                .arg("--network")
-                .arg(if opts.testnet { "testnet" } else { "mainnet" })
-                .arg("--wallet-dir")
-                .arg(dirs::config_dir().unwrap().tap_mut(|p| p.push("melminter")))
-                .stderr(Stdio::null())
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .spawn()
-                .unwrap();
-            smol::Timer::after(Duration::from_secs(1)).await;
-            _running_daemon = Some(daemon);
-            format!("127.0.0.1:{}", port).parse().unwrap()
-        };
-        scopeguard::defer!({
-            if let Some(mut d) = _running_daemon {
-                let _ = d.kill();
-            }
-        });
-        let daemon = MelwalletdClient::from(DaemonClient::new(daemon_addr));
         let network_id = if opts.testnet {
             NetID::Testnet
         } else {
             NetID::Mainnet
         };
+        let wallet_name = format!("{}{:?}", opts.wallet_prefix, network_id);
+        let (wallet, sk) = import_or_default(&wallet_name, network_id).await?;
+        let client = get_client(network_id, melbootstrap::bootstrap_routes(network_id)[0]).await?;
+        let state = MintState::new(wallet, sk, client);
+
+        // background task to continually sync wallet
+
         // workers
         let mut workers = vec![];
-        let wallet_name = format!("{}{:?}", opts.wallet_prefix, network_id);
         // make sure the worker has enough money
-        let daemon = match daemon.wallet_summary(wallet_name.clone()).await? {
-            Ok(wallet) => daemon,
-            Err(_) => {
-                let mut evt = dash_root.add_child(format!("creating new wallet {}", wallet_name));
-                evt.init(None, None);
-                log::info!("creating new wallet");
-                daemon
-                    .create_wallet(wallet_name.clone(), "".into(), None)
-                    .await??;
-                daemon
-            }
-        };
-        daemon
-            .unlock_wallet(wallet_name.clone(), "".into())
-            .await??;
-
         // Move money if wallet does not have enough money
-        while daemon
-            .wallet_summary(wallet_name.clone())
-            .await??
-            .detailed_balance
-            .get("MEL")
+        while state
+            .wallet
+            .lock()
+            .balances()
+            .get(&Denom::Mel)
             .copied()
             .unwrap_or(CoinValue(0))
             < CoinValue::from_millions(1u64) / 20
         {
+            // eprintln!("not enough money!");
             let _evt = dash_root
                 .add_child("Melminter requires a small amount of 'seed' MEL to start minting.");
             let _evt = dash_root.add_child(format!(
                 "Please send at least 0.1 MEL to {}",
-                daemon.wallet_summary(wallet_name.clone()).await??.address
+                state.wallet.lock().address
             ));
             smol::Timer::after(Duration::from_secs(1)).await;
         }
 
         workers.push(Worker::start(WorkerConfig {
-            daemon: Arc::new(daemon),
+            state,
             payout: opts.payout,
-            connect: melbootstrap::bootstrap_routes(network_id)[0],
             name: "".into(),
             tree: dash_root.clone(),
             threads: opts.threads.unwrap_or_else(num_cpus::get_physical),
             testnet: opts.testnet,
-            wallet_name: wallet_name.clone(),
         }));
 
         smol::future::pending().await
@@ -140,4 +103,51 @@ async fn repeat_fallible<T, E: std::fmt::Debug, F: Future<Output = Result<T, E>>
         }
         smol::Timer::after(Duration::from_secs(1)).await;
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct WalletSecret(Ed25519SK);
+
+async fn import_or_default(
+    wallet_name: &str,
+    network_id: NetID,
+) -> anyhow::Result<(Wallet, Ed25519SK)> {
+    // attempt to retrieve the secret key stored at `wallet_name`.txt
+    let sk_file = wallet_name.to_owned() + ".txt";
+
+    let secret: Ed25519SK = if let Ok(mut sk_f) = File::open(sk_file.clone()) {
+        let mut sk_str = String::new();
+        sk_f.read_to_string(&mut sk_str)?;
+        println!("wallet_name content: {sk_str}");
+        let sk = serde_json::from_str(&sk_str)?;
+        sk
+    } else {
+        let sk = Ed25519SK::generate();
+        let mut sk_f = File::create(sk_file)?;
+        let sk_str = serde_json::to_string(&sk)?;
+        sk_f.write(sk_str.as_bytes())?;
+        sk
+    };
+    // create new sk & store it
+    // make wallet
+    let cov = melvm::Covenant::std_ed25519_pk_new(secret.to_public());
+    let addr = cov.hash();
+    let wallet = Wallet {
+        address: addr,
+        height: BlockHeight(0),
+        confirmed_utxos: BTreeMap::new(),
+        pending_outgoing: BTreeMap::new(),
+        netid: network_id,
+    };
+    Ok((wallet, secret))
+}
+
+async fn get_client(network_id: NetID, connect: SocketAddr) -> anyhow::Result<Client> {
+    let client = Client::connect_http(network_id, connect).await?;
+    match network_id {
+        NetID::Testnet => client.trust(melbootstrap::checkpoint_height(NetID::Testnet).unwrap()),
+        NetID::Mainnet => client.trust(melbootstrap::checkpoint_height(NetID::Mainnet).unwrap()),
+        _ => anyhow::bail!("melminter only supported for testnet and mainnet"),
+    }
+    Ok(client)
 }
