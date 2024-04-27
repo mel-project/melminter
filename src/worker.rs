@@ -12,7 +12,7 @@ use melstructs::{
     Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, PoolKey, TxKind,
 };
 
-use melwallet::{PrepareTxArgs};
+use melwallet::PrepareTxArgs;
 use prodash::{messages::MessageLevel, tree::Item, unit::display::Mode};
 use smol::{
     channel::{Receiver, Sender},
@@ -59,7 +59,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
         let tree = tree.clone();
         let recv_stop = recv_stop.clone();
         let opts = opts.clone();
-         async move {
+        async move {
         let worker = tree.add_child("worker");
         let worker = Arc::new(Mutex::new(worker));
         let my_speed = compute_speed().await;
@@ -88,13 +88,13 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 mint_state.convert_doscs(our_ergs).await?;
             }
 
-            // If we have more than 1 MEL, transfer 0.5 MEL to the backup wallet.
+            // If we have more than 1 MEL, transfer half to the backup wallet.
             let our_mels = *mint_state.wallet.lock().balances().get(&Denom::Mel).unwrap_or(&CoinValue(0));
             if our_mels > CoinValue::from_millions(1u8) {
                 let to_convert = our_mels / 2;
                 worker.lock().unwrap().info(format!(
                     "transferring {} MEL of profits to backup wallet",
-                    our_mels
+                    to_convert
                 ));
                 let tx = mint_state.prepare_tx(PrepareTxArgs{ 
                     kind: TxKind::Normal, inputs: vec![], outputs: vec![CoinData {
@@ -103,7 +103,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     additional_data: vec![].into(),
                     denom: Denom::Mel,
                 }], covenants: vec![], data: Bytes::new(), fee_ballast: 0 }).await?;
-               
+
                 mint_state.send_raw(tx.clone()).await?;
                 mint_state.wait_tx(tx.hash_nosigs()).await?;
             }
@@ -119,7 +119,6 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     my_difficulty, approx_iter
                 ),
             );
-            // repeat because wallet could be out of money
             let threads = opts.threads;
             let fastest_speed = mint_state.client.latest_snapshot().await?.current_header().dosc_speed as f64 / 30.0;
             worker.lock().unwrap().info(format!(
@@ -229,57 +228,58 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 for (coin, data, proof) in batch {
                     sub.inc();
                     loop {
-                    let reward_attempt = async {
-                        // Retry until we don't see insufficient funds
-                        let reward_ergs = loop {
-                            let snap = mint_state.client.latest_snapshot().await?;
-                            let reward_speed = 2u128.pow(my_difficulty as u32)
-                                / (snap.current_header().height.0 + 40 - data.height.0) as u128;
-                            let reward = melstf::calculate_reward(
-                                reward_speed * 100,
-                                snap.current_header().dosc_speed,
-                                my_difficulty as u32,
-                                true
-                            );
-                            let reward_ergs =
-                                melstf::dosc_to_erg(snap.current_header().height, reward);
-                            match mint_state
-                                .send_mint_transaction(
-                                    coin,
-                                    my_difficulty,
-                                    proof.clone(),
-                                    reward_ergs.into(),
-                                )
-                                .await
-                            {
-                                Err(err) => {
-                                    if err.to_string().contains("preparation") || err.to_string().contains("timeout") {
-                                        let mut sub = sub.add_child("waiting for available coins ".to_owned() + &err.to_string());
-                                        sub.init(None, None);
-                                        smol::Timer::after(Duration::from_secs(10)).await;
-                                    } else {
-                                        anyhow::bail!(err)
+                        let reward_attempt = async {
+                            // Retry until we don't see insufficient funds
+                            let reward_ergs = loop {
+                                let snap = mint_state.client.latest_snapshot().await?;
+                                let reward_speed = 2u128.pow(my_difficulty as u32)
+                                    / (snap.current_header().height.0 + 40 - data.height.0) as u128;
+                                let reward = melstf::calculate_reward(
+                                    reward_speed * 100,
+                                    snap.current_header().dosc_speed,
+                                    my_difficulty as u32,
+                                    true
+                                );
+                                let reward_ergs =
+                                    melstf::dosc_to_erg(snap.current_header().height, reward);
+                                match mint_state
+                                    .send_mint_transaction(
+                                        coin,
+                                        my_difficulty,
+                                        proof.clone(),
+                                        reward_ergs.into(),
+                                    )
+                                    .await
+                                {
+                                    Err(err) => {
+                                        if err.to_string().contains("preparation") || err.to_string().contains("timeout") {
+                                            let mut sub = sub.add_child("waiting for available coins ".to_owned() + &err.to_string());
+                                            sub.init(None, None);
+                                            smol::Timer::after(Duration::from_secs(10)).await;
+                                        } else {
+                                            log::error!("error sending mint transaction: {err}");
+                                            anyhow::bail!(err)
+                                        }
+                                        }
+                                    Ok(res) => {
+                                        to_wait.push(res);
+                                        break reward_ergs;
                                     }
-                                    }
-                                Ok(res) => {
-                                    to_wait.push(res);
-                                    break reward_ergs;
                                 }
-                            }
-                        };
-                        sub.info(format!("minted {} ERG", CoinValue(reward_ergs)));
-                        Ok::<_, anyhow::Error>(())
+                            };
+                            sub.info(format!("minted {} ERG", CoinValue(reward_ergs)));
+                            Ok::<_, anyhow::Error>(())
+                        }
+                        .await;
+                        if let Err(err) = reward_attempt {
+                            sub.info(format!(
+                                "FAILED a proof submission for some reason : {:?}",
+                                err
+                            ));
+                        } else {
+                            break
+                        }
                     }
-                    .await;
-                    if let Err(err) = reward_attempt {
-                        sub.info(format!(
-                            "FAILED a proof submission for some reason : {:?}",
-                            err
-                        ));
-                    } else {
-                        break
-                    }
-                }
                 }
             }
             let mut sub = worker

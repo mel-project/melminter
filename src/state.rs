@@ -76,16 +76,16 @@ async fn open_wallet(client: &Client, secret: Ed25519SK) -> anyhow::Result<Walle
     // resync everything in the beginning
     let latest_snapshot = client.latest_snapshot().await?;
     let cov = melvm::Covenant::std_ed25519_pk_new(secret.to_public());
-    let addr = cov.hash();
+    let address = cov.hash();
     let mut wallet = Wallet {
-        address: addr,
+        address,
         height: BlockHeight(0),
         confirmed_utxos: BTreeMap::new(),
         pending_outgoing: BTreeMap::new(),
         netid: client.netid(),
     };
     let owned_coins = latest_snapshot
-        .get_coins(addr)
+        .get_coins(address)
         .await?
         .context("server does not support coin index, but we need it")?;
     log::debug!("initially loading wallet with coins {:?}!", owned_coins);
@@ -140,13 +140,12 @@ impl MintState {
     }
 
     pub async fn send_raw(&self, tx: Transaction) -> anyhow::Result<()> {
-        let _ = self
-            .client
+        self.client
             .latest_snapshot()
             .await?
             .get_raw()
             .send_tx(tx.clone())
-            .await?;
+            .await??;
         self.wallet.lock().add_pending(tx);
 
         Ok(())
@@ -216,6 +215,7 @@ impl MintState {
             .map(|d| *d.0)
             .collect())
     }
+
     /// Creates a partially-filled-in transaction, with the given difficulty, that's neither signed nor fee'd. The caller should fill in the DOSC output.
     pub async fn mint_batch(
         &self,

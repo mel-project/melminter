@@ -1,48 +1,37 @@
 use std::{future::Future, time::Duration};
 
 use cmdopts::CmdOpts;
-
 use melstructs::{CoinValue, Denom, NetID};
-
 use prodash::{
     render::line::{self, StreamKind},
     Tree,
 };
-
 use state::MintState;
 use structopt::StructOpt;
+
+use crate::worker::{Worker, WorkerConfig};
 
 mod cmdopts;
 mod state;
 mod worker;
-// use smol::prelude::*;
-use crate::worker::{Worker, WorkerConfig};
 
 fn main() -> anyhow::Result<()> {
-    // let log_conf = std::env::var("RUST_LOG").unwrap_or_else(|_| "melminter=debug,warn".into());
-    // std::env::set_var("RUST_LOG", log_conf);
-
     let dash_root = Tree::default();
     let dash_options = line::Options {
         keep_running_if_progress_is_empty: true,
         throughput: true,
-        // hide_cursor: true,
         ..Default::default()
     }
     .auto_configure(StreamKind::Stdout);
     let _handle = line::render(std::io::stdout(), dash_root.clone(), dash_options);
+    let opts = CmdOpts::from_args();
 
-    let opts: CmdOpts = CmdOpts::from_args();
     env_logger::init();
     smolscale::block_on(async move {
         let state = MintState::open(&opts.state, opts.network).await?;
-
-        // background task to continually sync wallet
-
-        // workers
         let mut workers = vec![];
-        // make sure the worker has enough money
-        // Move money if wallet does not have enough money
+
+        // make sure the worker has enough money, otherwise wait until user sends some
         while state
             .wallet
             .lock()
@@ -52,7 +41,6 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or(CoinValue(0))
             < CoinValue::from_millions(1u64) / 20
         {
-            // eprintln!("not enough money!");
             let _evt = dash_root
                 .add_child("Melminter requires a small amount of 'seed' MEL to start minting.");
             let _evt = dash_root.add_child(format!(
