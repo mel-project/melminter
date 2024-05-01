@@ -334,16 +334,10 @@ impl MintState {
     }
 
     /// removes any 0 value erg coins which prevent minting transactions
-    pub async fn clean_ergs(&self) -> anyhow::Result<()> {
-        let worthless_erg: Vec<(CoinID, CoinDataHeight)> = <BTreeMap<CoinID, CoinDataHeight> as Clone>::clone(
-            &self.wallet.lock().confirmed_utxos
-        )
-            .into_iter()
-            .filter(|(_, coin)| coin.coin_data.denom == Denom::Erg && coin.coin_data.value == CoinValue(0))
-            .collect();
+    pub async fn clean_ergs(&self, empty_ergs: Vec<(CoinID, CoinDataHeight)>) -> anyhow::Result<()> {
         let tx = self.prepare_tx(PrepareTxArgs {
             kind: TxKind::Normal,
-            inputs: worthless_erg,
+            inputs: empty_ergs,
             outputs: vec![CoinData {
                 covhash: Address::coin_destroy(),
                 value: CoinValue(0),

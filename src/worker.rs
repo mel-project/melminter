@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -86,7 +86,15 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     .lock()
                     .unwrap()
                     .message(MessageLevel::Info, format!("CONVERTING {} ERG!", ergs));
-                mint_state.clean_ergs().await?;
+                let empty_ergs: Vec<(CoinID, CoinDataHeight)> = <BTreeMap<CoinID, CoinDataHeight> as Clone>::clone(
+                    &mint_state.wallet.lock().confirmed_utxos
+                )
+                    .into_iter()
+                    .filter(|(_, coin)| coin.coin_data.denom == Denom::Erg && coin.coin_data.value == CoinValue(0))
+                    .collect();
+                if !empty_ergs.is_empty() {
+                    mint_state.clean_ergs(empty_ergs).await?;
+                }
                 mint_state.convert_doscs(*ergs).await?;
             }
 
