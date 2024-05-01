@@ -332,4 +332,32 @@ impl MintState {
         self.wait_tx(tx.hash_nosigs()).await?;
         Ok(())
     }
+
+    /// removes any 0 value erg coins which prevent minting transactions
+    pub async fn clean_ergs(&self) -> anyhow::Result<()> {
+        let worthless_erg: Vec<(CoinID, CoinDataHeight)> = <BTreeMap<CoinID, CoinDataHeight> as Clone>::clone(
+            &self.wallet.lock().confirmed_utxos
+        )
+            .into_iter()
+            .filter(|(_, coin)| coin.coin_data.denom == Denom::Erg && coin.coin_data.value == CoinValue(0))
+            .collect();
+        let tx = self.prepare_tx(PrepareTxArgs {
+            kind: TxKind::Normal,
+            inputs: worthless_erg,
+            outputs: vec![CoinData {
+                covhash: Address::coin_destroy(),
+                value: CoinValue(0),
+                denom: Denom::Erg,
+                additional_data: vec![].into(),
+            }],
+            covenants: vec![],
+            data: Bytes::new(),
+            fee_ballast: 0,
+        })
+        .await?;
+        self.send_raw(tx.clone()).await?;
+        self.wait_tx(tx.hash_nosigs()).await?;
+
+        Ok(())
+    }
 }

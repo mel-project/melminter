@@ -79,13 +79,15 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 .expect("must have erg-mel pool");
 
             // If we have any erg, convert it all to mel.
-            let our_ergs = *mint_state.wallet.lock().balances().get(&Denom::Erg).unwrap_or(&CoinValue(0));
-            if our_ergs > CoinValue(0) {
+            let balances = mint_state.wallet.lock().balances();
+            let our_ergs = balances.get(&Denom::Erg);
+            if let Some(ergs) = our_ergs {
                 worker
                     .lock()
                     .unwrap()
-                    .message(MessageLevel::Info, format!("CONVERTING {} ERG!", our_ergs));
-                mint_state.convert_doscs(our_ergs).await?;
+                    .message(MessageLevel::Info, format!("CONVERTING {} ERG!", ergs));
+                mint_state.clean_ergs().await?;
+                mint_state.convert_doscs(*ergs).await?;
             }
 
             // If we have more than 1 MEL, transfer half to the backup wallet.
