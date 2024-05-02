@@ -106,7 +106,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     "transferring {} MEL of profits to backup wallet",
                     to_convert
                 ));
-                let tx = mint_state.prepare_tx(PrepareTxArgs{ 
+                let tx = mint_state.prepare_tx(PrepareTxArgs {
                     kind: TxKind::Normal, inputs: vec![], outputs: vec![CoinData {
                     covhash: opts.payout,
                     value: to_convert,
@@ -262,7 +262,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                                     .await
                                 {
                                     Err(err) => {
-                                        if err.to_string().contains("preparation") || err.to_string().contains("timeout") {
+                                        if err.to_string().contains("not enough money") {
                                             let mut sub = sub.add_child("waiting for available coins ".to_owned() + &err.to_string());
                                             sub.init(None, None);
                                             smol::Timer::after(Duration::from_secs(10)).await;
@@ -270,7 +270,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                                             log::error!("error sending mint transaction: {err}");
                                             anyhow::bail!(err)
                                         }
-                                        }
+                                    }
                                     Ok(res) => {
                                         to_wait.push(res);
                                         break reward_ergs;

@@ -62,13 +62,12 @@ async fn wallet_sync_loop(wallet: Arc<Mutex<Wallet>>, client: Client) -> anyhow:
                     .latest_snapshot()
                     .await?
                     .get_raw()
-                    .send_tx(tx.clone())
+                    .send_tx(tx)
                     .await??;
-                wallet.lock().add_pending(tx);
             }
         }
 
-        smol::Timer::after(Duration::from_secs(10));
+        smol::Timer::after(Duration::from_secs(10)).await;
     }
 }
 
@@ -334,21 +333,25 @@ impl MintState {
     }
 
     /// removes any 0 value erg coins which prevent minting transactions
-    pub async fn clean_ergs(&self, empty_ergs: Vec<(CoinID, CoinDataHeight)>) -> anyhow::Result<()> {
-        let tx = self.prepare_tx(PrepareTxArgs {
-            kind: TxKind::Normal,
-            inputs: empty_ergs,
-            outputs: vec![CoinData {
-                covhash: Address::coin_destroy(),
-                value: CoinValue(0),
-                denom: Denom::Erg,
-                additional_data: vec![].into(),
-            }],
-            covenants: vec![],
-            data: Bytes::new(),
-            fee_ballast: 0,
-        })
-        .await?;
+    pub async fn clean_ergs(
+        &self,
+        empty_ergs: Vec<(CoinID, CoinDataHeight)>,
+    ) -> anyhow::Result<()> {
+        let tx = self
+            .prepare_tx(PrepareTxArgs {
+                kind: TxKind::Normal,
+                inputs: empty_ergs,
+                outputs: vec![CoinData {
+                    covhash: Address::coin_destroy(),
+                    value: CoinValue(0),
+                    denom: Denom::Erg,
+                    additional_data: vec![].into(),
+                }],
+                covenants: vec![],
+                data: Bytes::new(),
+                fee_ballast: 0,
+            })
+            .await?;
         self.send_raw(tx.clone()).await?;
         self.wait_tx(tx.hash_nosigs()).await?;
 
