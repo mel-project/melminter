@@ -134,7 +134,7 @@ impl MintState {
         let tx = self
             .wallet
             .lock()
-            .prepare_tx(args, &signer, fee_multiplier)?;
+            .prepare_tx(args, &signer, fee_multiplier, false)?;
         Ok(tx)
     }
 
@@ -329,32 +329,6 @@ impl MintState {
 
         self.send_raw(tx.clone()).await?;
         self.wait_tx(tx.hash_nosigs()).await?;
-        Ok(())
-    }
-
-    /// removes any 0 value erg coins which prevent minting transactions
-    pub async fn clean_ergs(
-        &self,
-        empty_ergs: Vec<(CoinID, CoinDataHeight)>,
-    ) -> anyhow::Result<()> {
-        let tx = self
-            .prepare_tx(PrepareTxArgs {
-                kind: TxKind::Normal,
-                inputs: empty_ergs,
-                outputs: vec![CoinData {
-                    covhash: Address::coin_destroy(),
-                    value: CoinValue(0),
-                    denom: Denom::Erg,
-                    additional_data: vec![].into(),
-                }],
-                covenants: vec![],
-                data: Bytes::new(),
-                fee_ballast: 0,
-            })
-            .await?;
-        self.send_raw(tx.clone()).await?;
-        self.wait_tx(tx.hash_nosigs()).await?;
-
         Ok(())
     }
 }

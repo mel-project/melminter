@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -79,23 +79,13 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 .expect("must have erg-mel pool");
 
             // If we have any erg, convert it all to mel.
-            let balances = mint_state.wallet.lock().balances();
-            let our_ergs = balances.get(&Denom::Erg);
-            if let Some(ergs) = our_ergs {
+            let our_ergs = *mint_state.wallet.lock().balances().get(&Denom::Erg).unwrap_or(&CoinValue(0));
+            if our_ergs > CoinValue(0) {
                 worker
                     .lock()
                     .unwrap()
-                    .message(MessageLevel::Info, format!("CONVERTING {} ERG!", ergs));
-                let empty_ergs: Vec<(CoinID, CoinDataHeight)> = <BTreeMap<CoinID, CoinDataHeight> as Clone>::clone(
-                    &mint_state.wallet.lock().confirmed_utxos
-                )
-                    .into_iter()
-                    .filter(|(_, coin)| coin.coin_data.denom == Denom::Erg && coin.coin_data.value == CoinValue(0))
-                    .collect();
-                if !empty_ergs.is_empty() {
-                    mint_state.clean_ergs(empty_ergs).await?;
-                }
-                mint_state.convert_doscs(*ergs).await?;
+                    .message(MessageLevel::Info, format!("CONVERTING {} ERG!", our_ergs));
+                mint_state.convert_doscs(our_ergs).await?;
             }
 
             // If we have more than 1 MEL, transfer half to the backup wallet.
@@ -229,8 +219,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 format!("built batch of {} future proofs", batch.len()),
             );
 
-            // Time to submit the proofs. For every proof in the batch, we attempt to submit it. If the submission fails, we move on, because there might be some weird race condition with melwalletd going on.
-            // We also attempt to submit transactions in parallel. This is done by retrying *only* on insufficient funds.
+            // Time to submit the proofs. For every proof in the batch, we attempt to submit it.
             let mut to_wait = vec![];
             {
                 let mut sub = worker.lock().unwrap().add_child("submitting proof");
