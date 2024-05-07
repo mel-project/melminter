@@ -101,7 +101,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     value: to_convert,
                     additional_data: vec![].into(),
                     denom: Denom::Mel,
-                }], covenants: vec![], data: Bytes::new(), fee_ballast: 0 }).await?;
+                }], covenants: vec![], data: Bytes::new(), fee_ballast: 0 }, false).await?;
 
                 mint_state.send_raw(tx.clone()).await?;
                 mint_state.wait_tx(tx.hash_nosigs()).await?;
@@ -228,7 +228,12 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 println!("{value}, {denom}")
             }
 
-            // Time to submit the proofs. For every proof in the batch, we attempt to submit it.
+            println!("MINTER WALLET BALANCES:",);
+            for (denom, value) in mint_state.wallet.lock().balances() {
+                println!("{value}, {denom}")
+            }
+
+            // Now for every proof in the batch, we attempt to submit it.
             let mut to_wait = vec![];
             {
                 let mut sub = worker.lock().unwrap().add_child("submitting proof");

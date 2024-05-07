@@ -139,7 +139,11 @@ impl MintState {
     }
 
     // helpers
-    pub async fn prepare_tx(&self, args: PrepareTxArgs) -> anyhow::Result<Transaction> {
+    pub async fn prepare_tx(
+        &self,
+        args: PrepareTxArgs,
+        check_balanced: bool,
+    ) -> anyhow::Result<Transaction> {
         let signer = StdEd25519Signer(self.sk);
         let fee_multiplier = self
             .client
@@ -150,7 +154,7 @@ impl MintState {
         let tx = self
             .wallet
             .lock()
-            .prepare_tx(args, &signer, fee_multiplier, false)?;
+            .prepare_tx(args, &signer, fee_multiplier, check_balanced)?;
         Ok(tx)
     }
 
@@ -193,21 +197,24 @@ impl MintState {
             }
             // generate a bunch of custom-token utxos
             let tx = self
-                .prepare_tx(PrepareTxArgs {
-                    kind: TxKind::Normal,
-                    inputs: vec![],
-                    outputs: std::iter::repeat_with(|| CoinData {
-                        covhash: my_address,
-                        denom: Denom::NewCustom,
-                        value: CoinValue(1),
-                        additional_data: vec![].into(),
-                    })
-                    .take(threads)
-                    .collect(),
-                    covenants: vec![],
-                    data: bytes::Bytes::new(),
-                    fee_ballast: 0,
-                })
+                .prepare_tx(
+                    PrepareTxArgs {
+                        kind: TxKind::Normal,
+                        inputs: vec![],
+                        outputs: std::iter::repeat_with(|| CoinData {
+                            covhash: my_address,
+                            denom: Denom::NewCustom,
+                            value: CoinValue(1),
+                            additional_data: vec![].into(),
+                        })
+                        .take(threads)
+                        .collect(),
+                        covenants: vec![],
+                        data: bytes::Bytes::new(),
+                        fee_ballast: 0,
+                    },
+                    true,
+                )
                 .await?;
             self.send_raw(tx.clone()).await?;
             self.wait_tx(tx.hash_nosigs()).await?;
@@ -306,19 +313,22 @@ impl MintState {
             .await?
             .unwrap();
         let tx = self
-            .prepare_tx(PrepareTxArgs {
-                kind: TxKind::DoscMint,
-                inputs: vec![(seed, seed_cdh)],
-                outputs: vec![CoinData {
-                    denom: Denom::Erg,
-                    value: ergs,
-                    additional_data: vec![].into(),
-                    covhash: own_cov,
-                }],
-                covenants: vec![],
-                data: Bytes::copy_from_slice(&(difficulty, proof).stdcode()),
-                fee_ballast: 0,
-            })
+            .prepare_tx(
+                PrepareTxArgs {
+                    kind: TxKind::DoscMint,
+                    inputs: vec![(seed, seed_cdh)],
+                    outputs: vec![CoinData {
+                        denom: Denom::Erg,
+                        value: ergs,
+                        additional_data: vec![].into(),
+                        covhash: own_cov,
+                    }],
+                    covenants: vec![],
+                    data: Bytes::copy_from_slice(&(difficulty, proof).stdcode()),
+                    fee_ballast: 0,
+                },
+                false,
+            )
             .await?;
         println!("value = {ergs}");
         self.send_raw(tx.clone()).await?;
@@ -329,19 +339,22 @@ impl MintState {
     pub async fn convert_doscs(&self, doscs: CoinValue) -> anyhow::Result<()> {
         let my_address = self.address().await?;
         let tx = self
-            .prepare_tx(PrepareTxArgs {
-                kind: TxKind::Swap,
-                inputs: vec![],
-                outputs: vec![CoinData {
-                    covhash: my_address,
-                    value: doscs,
-                    denom: Denom::Erg,
-                    additional_data: vec![].into(),
-                }],
-                covenants: vec![],
-                data: PoolKey::new(Denom::Mel, Denom::Erg).to_bytes(),
-                fee_ballast: 0,
-            })
+            .prepare_tx(
+                PrepareTxArgs {
+                    kind: TxKind::Swap,
+                    inputs: vec![],
+                    outputs: vec![CoinData {
+                        covhash: my_address,
+                        value: doscs,
+                        denom: Denom::Erg,
+                        additional_data: vec![].into(),
+                    }],
+                    covenants: vec![],
+                    data: PoolKey::new(Denom::Mel, Denom::Erg).to_bytes(),
+                    fee_ballast: 0,
+                },
+                true,
+            )
             .await?;
         self.send_raw(tx.clone()).await?;
         self.wait_tx(tx.hash_nosigs()).await?;
