@@ -30,10 +30,10 @@ pub struct MintState {
 
 async fn wallet_sync_loop(wallet: Arc<Mutex<Wallet>>, client: Client) -> anyhow::Result<()> {
     let wallet_addr = wallet.lock().address;
-    println!("MINTER WALLET BALANCES:",);
-    for (denom, value) in wallet.lock().balances() {
-        println!("{value}, {denom}")
-    }
+    // println!("MINTER WALLET BALANCES:",);
+    // for (denom, value) in wallet.lock().balances() {
+    //     println!("{value}, {denom}")
+    // }
     // sync new blocks in a loop
     loop {
         let latest_height = client.latest_snapshot().await?.current_header().height;
@@ -330,7 +330,7 @@ impl MintState {
                 false,
             )
             .await?;
-        println!("value = {ergs}");
+        // println!("value = {ergs}");
         self.send_raw(tx.clone()).await?;
         Ok(tx.hash_nosigs())
     }

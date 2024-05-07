@@ -83,8 +83,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     .lock()
                     .unwrap()
                     .message(MessageLevel::Info, format!("CONVERTING {} ERG!", our_ergs));
-                mint_state.convert_doscs(our_ergs).await?;
-                println!("converted ergs!");
+                mint_state.convert_doscs(our_ergs).await?; 
             }
 
             // If we have more than 1 MEL, transfer half to the backup wallet.
@@ -101,7 +100,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     value: to_convert,
                     additional_data: vec![].into(),
                     denom: Denom::Mel,
-                }], covenants: vec![], data: Bytes::new(), fee_ballast: 0 }, false).await?;
+                }], covenants: vec![], data: Bytes::new(), fee_ballast: 0 }, true).await?;
 
                 mint_state.send_raw(tx.clone()).await?;
                 mint_state.wait_tx(tx.hash_nosigs()).await?;
@@ -218,20 +217,10 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 format!("built batch of {} future proofs", batch.len()),
             );
 
-            println!("MINTER WALLET BALANCES:",);
-            for (denom, value) in mint_state.wallet.lock().balances() {
-                println!("{value}, {denom}")
-            }
-
-            println!("MINTER WALLET BALANCES:",);
-            for (denom, value) in mint_state.wallet.lock().balances() {
-                println!("{value}, {denom}")
-            }
-
-            println!("MINTER WALLET BALANCES:",);
-            for (denom, value) in mint_state.wallet.lock().balances() {
-                println!("{value}, {denom}")
-            }
+            // println!("MINTER WALLET BALANCES:",);
+            // for (denom, value) in mint_state.wallet.lock().balances() {
+            //     println!("{value}, {denom}")
+            // }
 
             // Now for every proof in the batch, we attempt to submit it.
             let mut to_wait = vec![];
