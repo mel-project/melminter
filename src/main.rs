@@ -42,9 +42,9 @@ fn main() -> anyhow::Result<()> {
             < CoinValue::from_millions(1u64) / 20
         {
             let _evt = dash_root
-                .add_child("Melminter requires a small amount of 'seed' MEL to start minting.");
+                .add_child("melminter requires a small amount of 'seed' MEL to start minting.");
             let _evt = dash_root.add_child(format!(
-                "Please send at least 0.1 MEL to {}",
+                "please send at least 0.1 MEL to {}",
                 state.wallet.lock().address
             ));
             smol::Timer::after(Duration::from_secs(1)).await;

@@ -1,12 +1,14 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap, net::SocketAddrV4, path::Path, str::FromStr, sync::Arc, time::Duration,
+};
 
 use anyhow::Context;
 use bytes::Bytes;
 use melprot::{Client, CoinChange};
 use melstf::Tip910MelPowHash;
 use melstructs::{
-    Address, BlockHeight, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, PoolKey,
-    Transaction, TxHash, TxKind,
+    Address, BlockHeight, Checkpoint, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID,
+    PoolKey, Transaction, TxHash, TxKind,
 };
 
 use melwallet::{PrepareTxArgs, StdEd25519Signer, Wallet};
@@ -14,7 +16,7 @@ use parking_lot::Mutex;
 
 use smol::Task;
 use stdcode::StdcodeSerializeExt;
-use tmelcrypt::Ed25519SK;
+use tmelcrypt::{Ed25519SK, HashVal};
 
 use crate::repeat_fallible;
 
@@ -28,6 +30,10 @@ pub struct MintState {
 
 async fn wallet_sync_loop(wallet: Arc<Mutex<Wallet>>, client: Client) -> anyhow::Result<()> {
     let wallet_addr = wallet.lock().address;
+    println!("MINTER WALLET BALANCES:",);
+    for (denom, value) in wallet.lock().balances() {
+        println!("{value}, {denom}")
+    }
     // sync new blocks in a loop
     loop {
         let latest_height = client.latest_snapshot().await?.current_header().height;
@@ -66,7 +72,6 @@ async fn wallet_sync_loop(wallet: Arc<Mutex<Wallet>>, client: Client) -> anyhow:
                     .await??;
             }
         }
-
         smol::Timer::after(Duration::from_secs(10)).await;
     }
 }
@@ -109,7 +114,18 @@ impl MintState {
                 }
             }
         };
-        let client = Client::autoconnect(network).await?;
+        // let client = Client::autoconnect(network).await?;
+        let client = Client::connect_http(
+            NetID::Custom02,
+            std::net::SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:2000")?),
+        )
+        .await?;
+        client.trust(Checkpoint {
+            height: BlockHeight(5121),
+            header_hash: HashVal::from_str(
+                "5358541a4cc47d94dcad18d37b10b12db1c94e2b3cd50c7f89b34048344e921e",
+            )?,
+        });
         let wallet = open_wallet(&client, sk).await?;
         let wallet = Arc::new(Mutex::new(wallet));
         Ok(Self {
@@ -304,6 +320,7 @@ impl MintState {
                 fee_ballast: 0,
             })
             .await?;
+        println!("value = {ergs}");
         self.send_raw(tx.clone()).await?;
         Ok(tx.hash_nosigs())
     }
@@ -326,7 +343,6 @@ impl MintState {
                 fee_ballast: 0,
             })
             .await?;
-
         self.send_raw(tx.clone()).await?;
         self.wait_tx(tx.hash_nosigs()).await?;
         Ok(())

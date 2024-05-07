@@ -21,7 +21,8 @@ anyhow= "1.0.58"
 hex= "0.4.3"
 stdcode = "0.1.10"
 
-melwallet = { git = "https://github.com/mel-project/melwallet", branch = "check-balanced" }
+# melwallet = { git = "https://github.com/mel-project/melwallet", branch = "check-balanced" }
+melwallet = { path = "../melwallet" }
 num_cpus= "1.13.1"
 
 fastrand= "1.8.0"

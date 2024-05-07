@@ -8,9 +8,7 @@ use crate::{repeat_fallible, state::MintState};
 use bytes::Bytes;
 use dashmap::{mapref::multiple::RefMulti, DashMap};
 use melstf::Tip910MelPowHash;
-use melstructs::{
-    Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, PoolKey, TxKind,
-};
+use melstructs::{Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, PoolKey, TxKind};
 
 use melwallet::PrepareTxArgs;
 use prodash::{messages::MessageLevel, tree::Item, unit::display::Mode};
@@ -86,6 +84,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     .unwrap()
                     .message(MessageLevel::Info, format!("CONVERTING {} ERG!", our_ergs));
                 mint_state.convert_doscs(our_ergs).await?;
+                println!("converted ergs!");
             }
 
             // If we have more than 1 MEL, transfer half to the backup wallet.
@@ -108,7 +107,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 mint_state.wait_tx(tx.hash_nosigs()).await?;
             }
 
-            let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 30000.0 })
+            let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 30.0 })
                 .log2()
                 .ceil() as usize;
             let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
@@ -219,6 +218,16 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 format!("built batch of {} future proofs", batch.len()),
             );
 
+            println!("MINTER WALLET BALANCES:",);
+            for (denom, value) in mint_state.wallet.lock().balances() {
+                println!("{value}, {denom}")
+            }
+
+            println!("MINTER WALLET BALANCES:",);
+            for (denom, value) in mint_state.wallet.lock().balances() {
+                println!("{value}, {denom}")
+            }
+
             // Time to submit the proofs. For every proof in the batch, we attempt to submit it.
             let mut to_wait = vec![];
             {
@@ -275,6 +284,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                                 "FAILED a proof submission for some reason : {:?}",
                                 err
                             ));
+                            smol::Timer::after(Duration::from_secs(10)).await;
                         } else {
                             break
                         }
