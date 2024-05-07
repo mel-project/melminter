@@ -8,9 +8,7 @@ use crate::{repeat_fallible, state::MintState};
 use bytes::Bytes;
 use dashmap::{mapref::multiple::RefMulti, DashMap};
 use melstf::Tip910MelPowHash;
-use melstructs::{
-    Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, PoolKey, TxKind,
-};
+use melstructs::{Address, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, PoolKey, TxKind};
 
 use melwallet::PrepareTxArgs;
 use prodash::{messages::MessageLevel, tree::Item, unit::display::Mode};
@@ -102,7 +100,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     value: to_convert,
                     additional_data: vec![].into(),
                     denom: Denom::Mel,
-                }], covenants: vec![], data: Bytes::new(), fee_ballast: 0 }).await?;
+                }], covenants: vec![], data: Bytes::new(), fee_ballast: 0 }, false).await?;
 
                 mint_state.send_raw(tx.clone()).await?;
                 mint_state.wait_tx(tx.hash_nosigs()).await?;
@@ -219,7 +217,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 format!("built batch of {} future proofs", batch.len()),
             );
 
-            // Time to submit the proofs. For every proof in the batch, we attempt to submit it.
+            // Now for every proof in the batch, we attempt to submit it.
             let mut to_wait = vec![];
             {
                 let mut sub = worker.lock().unwrap().add_child("submitting proof");
