@@ -222,13 +222,16 @@ impl MintState {
     }
 
     async fn get_seeds_raw(&self) -> anyhow::Result<Vec<CoinID>> {
+        let current_height = self.client.latest_snapshot().await?.current_header().height;
         Ok(self
             .wallet
             .lock()
             .confirmed_utxos
             .iter()
             .filter_map(|(k, v)| {
-                if matches!(v.coin_data.denom, Denom::Custom(_)) {
+                if matches!(v.coin_data.denom, Denom::Custom(_))
+                    && (current_height.0 - v.height.0 < 100)
+                {
                     Some((k, v))
                 } else {
                     None
