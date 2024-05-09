@@ -100,13 +100,13 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     value: to_convert,
                     additional_data: vec![].into(),
                     denom: Denom::Mel,
-                }], covenants: vec![], data: Bytes::new(), fee_ballast: 0 }, true).await?;
+                }], covenants: vec![], data: Bytes::new(), fee_ballast: 0 }).await?;
 
                 mint_state.send_raw(tx.clone()).await?;
                 mint_state.wait_tx(tx.hash_nosigs()).await?;
             }
 
-            let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 30.0 })
+            let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 30000.0 })
                 .log2()
                 .ceil() as usize;
             let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
@@ -217,10 +217,10 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 format!("built batch of {} future proofs", batch.len()),
             );
 
-            // println!("MINTER WALLET BALANCES:",);
-            // for (denom, value) in mint_state.wallet.lock().balances() {
-            //     println!("{value}, {denom}")
-            // }
+            println!("MINTER WALLET BALANCES:",);
+            for (denom, value) in mint_state.wallet.lock().balances() {
+                println!("{value}, {denom}")
+            }
 
             // Now for every proof in the batch, we attempt to submit it.
             let mut to_wait = vec![];
@@ -243,7 +243,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                                     true
                                 );
                                 let reward_ergs =
-                                    melstf::dosc_to_erg(snap.current_header().height, reward);
+                                    melstf::dosc_to_erg(snap.current_header().height, reward); 
                                 match mint_state
                                     .send_mint_transaction(
                                         coin,

@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
 
     env_logger::init();
     smolscale::block_on(async move {
-        let state = MintState::open(&opts.state, opts.network).await?;
+        let state = MintState::open(&opts.state, opts.network, opts.bootstrap).await?;
         let mut workers = vec![];
 
         // make sure the worker has enough money, otherwise wait until user sends some
@@ -39,12 +39,12 @@ fn main() -> anyhow::Result<()> {
             .get(&Denom::Mel)
             .copied()
             .unwrap_or(CoinValue(0))
-            < CoinValue::from_millions(1u64) / 20
+            < CoinValue::from_millions(1u64) / 2
         {
             let _evt = dash_root
                 .add_child("melminter requires a small amount of 'seed' MEL to start minting.");
             let _evt = dash_root.add_child(format!(
-                "please send at least 0.1 MEL to {}",
+                "please send at least 0.5 MEL to {}",
                 state.wallet.lock().address
             ));
             smol::Timer::after(Duration::from_secs(1)).await;

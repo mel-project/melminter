@@ -37,7 +37,7 @@ melpow = "0.1.1"
 melstructs = "0.3.2"
 melprot = "0.13.2"
 melstf = "0.12.0"
-melbootstrap = "0.8.2"
+melbootstrap = { path = "../melbootstrap/" }
 melvm = "0.1.1"
 smolscale = "0.3.52"
 parking_lot = "0.12.1"

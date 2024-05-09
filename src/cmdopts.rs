@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    net::{SocketAddr, SocketAddrV4},
+    path::PathBuf,
+};
 
 use melstructs::{Address, NetID};
 use structopt::StructOpt;
@@ -17,6 +20,9 @@ pub struct CmdOpts {
     #[structopt(long, default_value = "mainnet")]
     /// Whether to use testnet
     pub network: NetID,
+
+    #[structopt(long)]
+    pub bootstrap: Option<SocketAddr>,
 
     #[structopt(long)]
     /// Force a certain number of threads. Defaults to the number of *physical* CPUs.

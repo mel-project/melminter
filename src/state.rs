@@ -1,5 +1,10 @@
 use std::{
-    collections::BTreeMap, net::SocketAddrV4, path::Path, str::FromStr, sync::Arc, time::Duration,
+    collections::BTreeMap,
+    net::{SocketAddr, SocketAddrV4},
+    path::Path,
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
 };
 
 use anyhow::Context;
@@ -30,10 +35,10 @@ pub struct MintState {
 
 async fn wallet_sync_loop(wallet: Arc<Mutex<Wallet>>, client: Client) -> anyhow::Result<()> {
     let wallet_addr = wallet.lock().address;
-    // println!("MINTER WALLET BALANCES:",);
-    // for (denom, value) in wallet.lock().balances() {
-    //     println!("{value}, {denom}")
-    // }
+    println!("MINTER WALLET BALANCES:",);
+    for (denom, value) in wallet.lock().balances() {
+        println!("{value}, {denom}")
+    }
     // sync new blocks in a loop
     loop {
         let latest_height = client.latest_snapshot().await?.current_header().height;
@@ -99,7 +104,11 @@ async fn open_wallet(client: &Client, secret: Ed25519SK) -> anyhow::Result<Walle
 
 impl MintState {
     /// Open a new MintState, given a folder where all persistent state is stored.
-    pub async fn open(state_folder: &Path, network: NetID) -> anyhow::Result<Self> {
+    pub async fn open(
+        state_folder: &Path,
+        network: NetID,
+        bootstrap: Option<SocketAddr>,
+    ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(state_folder)?;
         let sk = {
             let mut sk_path = state_folder.to_owned();
@@ -114,18 +123,15 @@ impl MintState {
                 }
             }
         };
-        // let client = Client::autoconnect(network).await?;
-        let client = Client::connect_http(
-            NetID::Custom02,
-            std::net::SocketAddr::V4(SocketAddrV4::from_str("127.0.0.1:2000")?),
-        )
-        .await?;
-        client.trust(Checkpoint {
-            height: BlockHeight(5121),
-            header_hash: HashVal::from_str(
-                "5358541a4cc47d94dcad18d37b10b12db1c94e2b3cd50c7f89b34048344e921e",
-            )?,
-        });
+        let client = if let Some(bootstrap) = bootstrap {
+            let client = Client::connect_http(network, bootstrap).await?;
+            let trusted_height = melbootstrap::checkpoint_height(network)
+                .context("Unable to get checkpoint height")?;
+            client.trust(trusted_height);
+            client
+        } else {
+            Client::autoconnect(network).await?
+        };
         let wallet = open_wallet(&client, sk).await?;
         let wallet = Arc::new(Mutex::new(wallet));
         Ok(Self {
@@ -139,11 +145,7 @@ impl MintState {
     }
 
     // helpers
-    pub async fn prepare_tx(
-        &self,
-        args: PrepareTxArgs,
-        check_balanced: bool,
-    ) -> anyhow::Result<Transaction> {
+    pub async fn prepare_tx(&self, args: PrepareTxArgs) -> anyhow::Result<Transaction> {
         let signer = StdEd25519Signer(self.sk);
         let fee_multiplier = self
             .client
@@ -154,7 +156,7 @@ impl MintState {
         let tx = self
             .wallet
             .lock()
-            .prepare_tx(args, &signer, fee_multiplier, check_balanced)?;
+            .prepare_tx(args, &signer, fee_multiplier)?;
         Ok(tx)
     }
 
@@ -197,24 +199,21 @@ impl MintState {
             }
             // generate a bunch of custom-token utxos
             let tx = self
-                .prepare_tx(
-                    PrepareTxArgs {
-                        kind: TxKind::Normal,
-                        inputs: vec![],
-                        outputs: std::iter::repeat_with(|| CoinData {
-                            covhash: my_address,
-                            denom: Denom::NewCustom,
-                            value: CoinValue(1),
-                            additional_data: vec![].into(),
-                        })
-                        .take(threads)
-                        .collect(),
-                        covenants: vec![],
-                        data: bytes::Bytes::new(),
-                        fee_ballast: 0,
-                    },
-                    true,
-                )
+                .prepare_tx(PrepareTxArgs {
+                    kind: TxKind::Normal,
+                    inputs: vec![],
+                    outputs: std::iter::repeat_with(|| CoinData {
+                        covhash: my_address,
+                        denom: Denom::NewCustom,
+                        value: CoinValue(1),
+                        additional_data: vec![].into(),
+                    })
+                    .take(threads)
+                    .collect(),
+                    covenants: vec![],
+                    data: bytes::Bytes::new(),
+                    fee_ballast: 0,
+                })
                 .await?;
             self.send_raw(tx.clone()).await?;
             self.wait_tx(tx.hash_nosigs()).await?;
@@ -312,25 +311,23 @@ impl MintState {
             .get_coin(seed)
             .await?
             .unwrap();
+        // println!("SEED_CDHHHHHHHHH = {}", seed_cdh.height);
         let tx = self
-            .prepare_tx(
-                PrepareTxArgs {
-                    kind: TxKind::DoscMint,
-                    inputs: vec![(seed, seed_cdh)],
-                    outputs: vec![CoinData {
-                        denom: Denom::Erg,
-                        value: ergs,
-                        additional_data: vec![].into(),
-                        covhash: own_cov,
-                    }],
-                    covenants: vec![],
-                    data: Bytes::copy_from_slice(&(difficulty, proof).stdcode()),
-                    fee_ballast: 0,
-                },
-                false,
-            )
+            .prepare_tx(PrepareTxArgs {
+                kind: TxKind::DoscMint,
+                inputs: vec![(seed, seed_cdh)],
+                outputs: vec![CoinData {
+                    denom: Denom::Erg,
+                    value: ergs,
+                    additional_data: vec![].into(),
+                    covhash: own_cov,
+                }],
+                covenants: vec![],
+                data: Bytes::copy_from_slice(&(difficulty, proof).stdcode()),
+                fee_ballast: 0,
+            })
             .await?;
-        // println!("value = {ergs}");
+        println!("REWARD ERGS: {ergs}");
         self.send_raw(tx.clone()).await?;
         Ok(tx.hash_nosigs())
     }
@@ -339,22 +336,19 @@ impl MintState {
     pub async fn convert_doscs(&self, doscs: CoinValue) -> anyhow::Result<()> {
         let my_address = self.address().await?;
         let tx = self
-            .prepare_tx(
-                PrepareTxArgs {
-                    kind: TxKind::Swap,
-                    inputs: vec![],
-                    outputs: vec![CoinData {
-                        covhash: my_address,
-                        value: doscs,
-                        denom: Denom::Erg,
-                        additional_data: vec![].into(),
-                    }],
-                    covenants: vec![],
-                    data: PoolKey::new(Denom::Mel, Denom::Erg).to_bytes(),
-                    fee_ballast: 0,
-                },
-                true,
-            )
+            .prepare_tx(PrepareTxArgs {
+                kind: TxKind::Swap,
+                inputs: vec![],
+                outputs: vec![CoinData {
+                    covhash: my_address,
+                    value: doscs,
+                    denom: Denom::Erg,
+                    additional_data: vec![].into(),
+                }],
+                covenants: vec![],
+                data: PoolKey::new(Denom::Mel, Denom::Erg).to_bytes(),
+                fee_ballast: 0,
+            })
             .await?;
         self.send_raw(tx.clone()).await?;
         self.wait_tx(tx.hash_nosigs()).await?;
