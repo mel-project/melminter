@@ -83,7 +83,7 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                     .lock()
                     .unwrap()
                     .message(MessageLevel::Info, format!("CONVERTING {} ERG!", our_ergs));
-                mint_state.convert_doscs(our_ergs).await?; 
+                mint_state.convert_doscs(our_ergs).await?;
             }
 
             // If we have more than 1 MEL, transfer half to the backup wallet.
