@@ -217,10 +217,10 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
                 format!("built batch of {} future proofs", batch.len()),
             );
 
-            println!("MINTER WALLET BALANCES:",);
-            for (denom, value) in mint_state.wallet.lock().balances() {
-                println!("{value}, {denom}")
-            }
+            // println!("MINTER WALLET BALANCES:",);
+            // for (denom, value) in mint_state.wallet.lock().balances() {
+            //     println!("{value}, {denom}")
+            // }
 
             // Now for every proof in the batch, we attempt to submit it.
             let mut to_wait = vec![];

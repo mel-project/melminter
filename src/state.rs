@@ -12,8 +12,8 @@ use bytes::Bytes;
 use melprot::{Client, CoinChange};
 use melstf::Tip910MelPowHash;
 use melstructs::{
-    Address, BlockHeight, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID,
-    PoolKey, Transaction, TxHash, TxKind,
+    Address, BlockHeight, CoinData, CoinDataHeight, CoinID, CoinValue, Denom, NetID, PoolKey,
+    Transaction, TxHash, TxKind,
 };
 
 use melwallet::{PrepareTxArgs, StdEd25519Signer, Wallet};
@@ -36,10 +36,10 @@ pub struct MintState {
 async fn wallet_sync_loop(wallet: Arc<Mutex<Wallet>>, client: Client) -> anyhow::Result<()> {
     let wallet_addr = wallet.lock().address;
 
-    println!("MINTER WALLET BALANCES:",);
-    for (denom, value) in wallet.lock().balances() {
-        println!("{value}, {denom}")
-    }
+    // println!("MINTER WALLET BALANCES:",);
+    // for (denom, value) in wallet.lock().balances() {
+    //     println!("{value}, {denom}")
+    // }
     // sync new blocks in a loop
     loop {
         let latest_height = client.latest_snapshot().await?.current_header().height;
@@ -147,7 +147,6 @@ impl MintState {
 
     // helpers
     pub async fn prepare_tx(&self, args: PrepareTxArgs) -> anyhow::Result<Transaction> {
-    pub async fn prepare_tx(&self, args: PrepareTxArgs) -> anyhow::Result<Transaction> {
         let signer = StdEd25519Signer(self.sk);
         let fee_multiplier = self
             .client
@@ -158,7 +157,6 @@ impl MintState {
         let tx = self
             .wallet
             .lock()
-            .prepare_tx(args, &signer, fee_multiplier)?;
             .prepare_tx(args, &signer, fee_multiplier)?;
         Ok(tx)
     }
@@ -202,21 +200,6 @@ impl MintState {
             }
             // generate a bunch of custom-token utxos
             let tx = self
-                .prepare_tx(PrepareTxArgs {
-                    kind: TxKind::Normal,
-                    inputs: vec![],
-                    outputs: std::iter::repeat_with(|| CoinData {
-                        covhash: my_address,
-                        denom: Denom::NewCustom,
-                        value: CoinValue(1),
-                        additional_data: vec![].into(),
-                    })
-                    .take(threads)
-                    .collect(),
-                    covenants: vec![],
-                    data: bytes::Bytes::new(),
-                    fee_ballast: 0,
-                })
                 .prepare_tx(PrepareTxArgs {
                     kind: TxKind::Normal,
                     inputs: vec![],
@@ -344,21 +327,8 @@ impl MintState {
                 data: Bytes::copy_from_slice(&(difficulty, proof).stdcode()),
                 fee_ballast: 0,
             })
-            .prepare_tx(PrepareTxArgs {
-                kind: TxKind::DoscMint,
-                inputs: vec![(seed, seed_cdh)],
-                outputs: vec![CoinData {
-                    denom: Denom::Erg,
-                    value: ergs,
-                    additional_data: vec![].into(),
-                    covhash: own_cov,
-                }],
-                covenants: vec![],
-                data: Bytes::copy_from_slice(&(difficulty, proof).stdcode()),
-                fee_ballast: 0,
-            })
             .await?;
-        println!("REWARD ERGS: {ergs}");
+        // println!("REWARD ERGS: {ergs}");
         self.send_raw(tx.clone()).await?;
         Ok(tx.hash_nosigs())
     }
@@ -367,19 +337,6 @@ impl MintState {
     pub async fn convert_doscs(&self, doscs: CoinValue) -> anyhow::Result<()> {
         let my_address = self.address().await?;
         let tx = self
-            .prepare_tx(PrepareTxArgs {
-                kind: TxKind::Swap,
-                inputs: vec![],
-                outputs: vec![CoinData {
-                    covhash: my_address,
-                    value: doscs,
-                    denom: Denom::Erg,
-                    additional_data: vec![].into(),
-                }],
-                covenants: vec![],
-                data: PoolKey::new(Denom::Mel, Denom::Erg).to_bytes(),
-                fee_ballast: 0,
-            })
             .prepare_tx(PrepareTxArgs {
                 kind: TxKind::Swap,
                 inputs: vec![],
