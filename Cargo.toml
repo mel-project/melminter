@@ -21,7 +21,6 @@ anyhow= "1.0.58"
 hex= "0.4.3"
 stdcode = "0.1.10"
 
-melwallet = { git = "https://github.com/mel-project/melwallet", branch = "master" }
 num_cpus= "1.13.1"
 
 fastrand= "1.8.0"
@@ -41,3 +40,4 @@ melvm = "0.1.1"
 smolscale = "0.3.52"
 parking_lot = "0.12.1"
 bytes = "1.4.0"
+melwallet = "0.1.1"

@@ -1612,8 +1612,9 @@ dependencies = [
 
 [[package]]
 name = "melwallet"
-version = "0.1.0"
-source = "git+https://github.com/mel-project/melwallet?branch=master#0b91e0a0ee42fe2d0b36c3c0173bbe20b5ad16fd"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d03eed9d4955960b48f08f1a0b2ad0d0da24ec8949c2bef5a6a9636775b8052d"
 dependencies = [
  "bytes",
  "melstructs",
