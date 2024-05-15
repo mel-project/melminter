@@ -1513,15 +1513,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "melbootstrap"
-version = "0.8.5"
-source = "git+https://github.com/mel-project/melbootstrap#61a00b50661247cf151fb0756e3f16699f6ae701"
-dependencies = [
- "melstructs",
- "once_cell",
-]
-
-[[package]]
 name = "melminter"
 version = "0.8.2"
 dependencies = [
@@ -1534,7 +1525,7 @@ dependencies = [
  "fastrand 1.9.0",
  "hex",
  "log",
- "melbootstrap 0.8.5 (git+https://github.com/mel-project/melbootstrap)",
+ "melbootstrap",
  "melpow",
  "melprot",
  "melstf",
@@ -1611,7 +1602,7 @@ dependencies = [
  "hex",
  "log",
  "lru",
- "melbootstrap 0.8.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "melbootstrap",
  "melnet2",
  "melstructs",
  "mini-moka",
@@ -1721,8 +1712,9 @@ dependencies = [
 
 [[package]]
 name = "melwallet"
-version = "0.1.0"
-source = "git+https://github.com/mel-project/melwallet?branch=check-balanced#6eca07800f113e84f4851e50ea734bd75a62ea4a"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e2e5876046d29f0fca3f6c3a2b3789452a2c52445bd45a6b426cf7af21c52d7"
 dependencies = [
  "bytes",
  "melstructs",
