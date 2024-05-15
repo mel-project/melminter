@@ -1,7 +1,4 @@
-use std::{
-    net::{SocketAddr, SocketAddrV4},
-    path::PathBuf,
-};
+use std::{net::SocketAddr, path::PathBuf};
 
 use melstructs::{Address, NetID};
 use structopt::StructOpt;

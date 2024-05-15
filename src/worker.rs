@@ -109,11 +109,11 @@ async fn main_async(opts: WorkerConfig, recv_stop: Receiver<()>) -> anyhow::Resu
             let my_difficulty = (my_speed * if is_testnet { 120.0 } else { 30000.0 })
                 .log2()
                 .ceil() as usize;
-            let approx_iter = Duration::from_secs_f64(2.0f64.powi(my_difficulty as _) / my_speed);
+            let approx_iter = 2.0f64.powi(my_difficulty as _) / my_speed / 3600.0;
             worker.lock().unwrap().message(
                 MessageLevel::Info,
                 format!(
-                    "Selected difficulty: {} (approx. {:?} / tx)",
+                    "Selected difficulty: {} (approx. {:.3} hrs / tx)",
                     my_difficulty, approx_iter
                 ),
             );
